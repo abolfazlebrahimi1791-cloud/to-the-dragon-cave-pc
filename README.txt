@@ -31,7 +31,23 @@ Requirements
 Run
 ---
     python dragon_cave.py
-(or run.bat on Windows, run.sh on Linux)
+(or run.bat on Windows, run.sh on Linux; alternatively
+"python -m dragoncave" from the game folder)
+
+Project structure (multi-file)
+------------------------------
+    dragon_cave.py            launcher - run the game with this file
+    dragoncave/config.py      game data: 24 levels, enemies, prices, paths
+    dragoncave/speech.py      speech backends (Orca D-Bus, accessible_output2,
+                              pyttsx3)
+    dragoncave/audio.py       AudioEngine - stereo positional OGG playback,
+                              UI sounds, sfx resolver
+    dragoncave/keys.py        keyboard bindings (CONTROLS) + key matching
+    dragoncave/save.py        save.json player session + LevelStats
+    dragoncave/world.py       Attacker / Projectile / GameWorld entities
+    dragoncave/game.py        menus, combat, boss fights, marketplace, render
+    dragoncave/main.py        pygame main loop
+    audio/                    all 800+ original game sounds (OGG)
 
 Keys - every key action is one original touch gesture
 ------------------------------------------------------
@@ -54,8 +70,8 @@ The pause menu offers Resume, Restart level and Main menu
 (up/down arrows to choose, Enter to activate, Escape to resume).
 
 The key bindings are fixed constants in the CONTROLS table inside
-dragon_cave.py - every action there documents which original touch
-gesture it replaces.
+dragoncave/keys.py - every action there documents which original touch
+gesture it replaces. No external configuration file is used.
 
 Player data (JSON)
 ------------------
