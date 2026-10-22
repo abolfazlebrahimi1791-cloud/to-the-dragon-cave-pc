@@ -69,7 +69,9 @@ Keys - every key action is one original touch gesture
 Menus: Escape goes back from every submenu (level select, settings,
 credits). In Settings, move to the "Back" item and press Enter - or
 just press Escape - to return to the main menu. The theme song keeps
-playing when you return from a submenu.
+playing when you return from a submenu. The Credits screen reads its
+full content aloud on every page (left/right or up/down to browse,
+Escape or Enter for the menu) and plays the original final song.
 
 The pause menu offers Resume, Restart level and Main menu
 (up/down arrows to choose, Enter to activate, Escape to resume).
@@ -107,10 +109,14 @@ second after hearing an enemy attack to dodge or strike. The stereo
 position of every enemy sound (footsteps, attacks, injuries, deaths)
 follows your facing in real time - turn toward a sound and it slides
 to the center of your head, exactly like the original FMOD audio.
-All menus, intro/outro dialogues and status information are spoken in
-English. The theme song plays in the main menu and the final song in
-the credits; adjust the music volume any time with Page Up / Page Down
-(announced aloud, saved in save.json).
+Arrows and fireballs fly straight in the direction you faced when you
+fired (just like the original), so aim by turning first, then shoot;
+the shot hits the first enemy it reaches. On the tutorial level the
+game speaks up after you miss two shots. All menus, intro/outro
+dialogues and status information are spoken in English. The theme
+song plays in the main menu and the final song in the credits; adjust
+the music volume any time with Page Up / Page Down (announced aloud,
+saved in save.json).
 
 Credits
 -------

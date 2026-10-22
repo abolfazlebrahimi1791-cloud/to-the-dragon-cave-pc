@@ -11,6 +11,7 @@ import random
 import time
 import threading
 import sys
+import textwrap
 
 import pygame
 
@@ -18,7 +19,6 @@ from .config import (LEVELS, ENDLESS, PROJECTILE, MARKET_PRICES,
                      NUMBER_OF_LEVELS, FIREBALL_AVAILABLE_FROM_LEVEL,
                      SWORD_DAMAGE, SWORD_ATTACK_SPEED, CROSSBOW_ATTACK_SPEED,
                      DISTANCE_BONUS, ATTACKER_DISTANCE,
-                     DIFFICULTY_EASY_MULTIPLIER, DIFFICULTY_HARD_MULTIPLIER,
                      unity_random_range_int, unity_random_range_float)
 from .speech import SPEECH
 from .audio import AUDIO, sfx
@@ -114,9 +114,8 @@ class Game:
             self.settings_index = 0
             self.speak_settings()
         elif idx == 5:
-            self.set_state("Credits")
-            self.credits_page = 0
-            SPEECH.say("Credits. Page 1. Left and right arrow to change page, escape to go back.")
+            AUDIO.play_ui("open")
+            self.open_credits()
         elif idx == 6:
             self.quit()
 
@@ -280,10 +279,45 @@ class Game:
             self.launch_level(SESSION.level)
 
     def _goto_credits(self):
+        self.open_credits(prefix="Congratulations! You finished the game.")
+
+    # ------------------------------------------------------------- credits
+    # The original Credits scene categories (from the decoded scenes):
+    # Story, Programming, GraphicDesign, SoundDesign, Music, RoleLyricsMusic,
+    # RoleMusicArrangement, FinalSong, RolePrincess, RoleDove, RoleNarrator,
+    # RoleDragonSlayer, RoleSinging, VoiceOvers (Czech/English/German/Polish),
+    # Translators (EN/DE/PL/ES), GameplayConsultants, QA, Marketing.
+    CREDITS_TEXT = [
+        "To the Dragon Cave. An audio game by Kikiriki Games, an independent "
+        "Czech studio that makes games for blind and low vision players. "
+        "Story, programming and graphic design by the Kikiriki Games team.",
+        "Voice roles. The princess, the dove, the narrator, the dragon slayer "
+        "and the singing. Voice overs were recorded in Czech, English, German "
+        "and Polish for the original release.",
+        "Translations into English, German, Polish and Spanish by the Kikiriki "
+        "translation team. Gameplay consultants and Q A testers made sure the "
+        "game is fully playable without sight.",
+        "Music and lyrics, role music arrangement and the final song by "
+        "Kikiriki Games. Sound design made with F M O D studio.",
+        "Follow Kikiriki Games on Twitter, twitter dot com, slash, games "
+        "kikiriki, or on Facebook, facebook dot com, slash, Kikiriki Games. "
+        "This unofficial P C port was produced by reverse engineering the "
+        "Android version for accessibility. Thank you for playing!",
+    ]
+
+    def open_credits(self, prefix=""):
+        """Credits state + the original Final song + the page read aloud.
+        (Accessibility fix: the pages used to announce only the page number.)"""
         self.set_state("Credits")
         self.credits_page = 0
+        AUDIO.stop_music()
         AUDIO.play_music("Final song", self.music_vol(0.6), loop=True)
-        SPEECH.say("Congratulations! You finished the game. Credits. Left and right to browse, escape for menu.")
+        self.speak_credits(prefix)
+
+    def speak_credits(self, prefix=""):
+        txt = "Credits page %d of %d. %s" % (
+            self.credits_page + 1, self.credits_pages, self.CREDITS_TEXT[self.credits_page])
+        SPEECH.say((prefix + " " if prefix else "") + txt)
 
     def quit(self):
         SESSION.save()
@@ -332,13 +366,33 @@ class Game:
         return best
 
     def _arrow_fire(self):
+        # Port of Crossbow.Attack (RVA 0xDB2188): the arrow is instantiated at
+        # the camera transform and flies STRAIGHT in the direction the player
+        # faced at fire time. The original fires blindly - no target check,
+        # no miss count here (the miss is counted when the arrow expires).
         w = self.world
-        tgt = self._nearest_in_front(8.0)
-        p = Projectile("arrow", PROJECTILE["arrow"]["speed"], PROJECTILE["arrow"]["damage"],
-                       w.player_bearing)
+        p = Projectile("arrow", PROJECTILE["arrow"]["speed"],
+                       PROJECTILE["arrow"]["damage"], w.player_bearing)
         w.projectiles.append(p)
-        if tgt is None:
-            LevelStats.crossbowMiss += 1
+
+    def _projectile_target(self, p, window_deg, prev_dist):
+        """Port of Projectile.OnTriggerEnter (RVA 0xE4A1C0): the projectile is
+        a physical object flying STRAIGHT in the bearing it was fired at - it
+        does NOT follow the player's facing. It damages the FIRST (closest)
+        living enemy it reaches inside its narrow angular window, then is
+        destroyed - one hit per projectile."""
+        best = None
+        for e in self.world.enemies:
+            if e.is_dying:
+                continue
+            ang = abs(e.bearing - p.bearing)
+            ang = min(ang, 360.0 - ang)
+            if ang > window_deg:
+                continue
+            if prev_dist - 1.0 <= e.distance <= p.distance + 1.0:
+                if best is None or e.distance < best.distance:
+                    best = e
+        return best
 
     def _sword_hit(self):
         w = self.world
@@ -530,29 +584,34 @@ class Game:
                     else:
                         SPEECH.say("Missed!")
 
-        # ---- projectiles
+        # ---- projectiles (straight flight + first-collider hit)
         for p in list(w.projectiles):
+            prev = p.distance
             p.distance += p.speed * dt
             if p.kind == "arrow":
-                tgt = self._nearest_in_front(6.0)
-                if tgt and p.distance >= tgt.distance - 1.0:
+                tgt = self._projectile_target(p, 6.0, prev)
+                if tgt is not None:
                     LevelStats.crossbowHit += 1
-                    dmg = p.damage
-                    if SESSION.difficulty != 1:
-                        dmg = int(dmg * (DIFFICULTY_EASY_MULTIPLIER if SESSION.difficulty == 0
-                                         else DIFFICULTY_HARD_MULTIPLIER))
-                    killed = self._hit_enemy(tgt, dmg, by="crossbow")
+                    # difficulty adjustment happens exactly ONCE, inside
+                    # deal_damage (like Health.DealDamage in the original)
+                    killed = self._hit_enemy(tgt, p.damage, by="crossbow")
                     if killed:
                         LevelStats.enemiesKilledByCrossbow += 1
                         if tgt.distance > DISTANCE_BONUS:
                             LevelStats.distantKills += 1
                     p.dead = True
                 elif p.distance > ATTACKER_DISTANCE + 10:
+                    # OnTriggerEnter: blocker/ground contact = miss, counted
+                    # ONCE when the arrow reaches the end of its flight
                     LevelStats.crossbowMiss += 1
+                    # Introduction tutorial: the 2nd missed shot plays the
+                    # tutorial voice once (event:/Introduction/crossbow_fired_missed)
+                    if w.cfg.get("introduction") and LevelStats.crossbowMiss == 2:
+                        AUDIO.play(sfx("Introduction Attack Miss") or "", 1.0)
                     p.dead = True
             elif p.kind == "fireball":
-                tgt = self._nearest_in_front(10.0)
-                if tgt and p.distance >= tgt.distance - 1.0:
+                tgt = self._projectile_target(p, 10.0, prev)
+                if tgt is not None:
                     LevelStats.fireballHit += 1
                     killed = self._hit_enemy(tgt, p.damage, by="fireball")
                     if killed:
@@ -585,7 +644,6 @@ class Game:
             w.fireball_cooldown -= dt
             if w.fireball_cooldown <= 0:
                 w.is_throwing_fireball = False
-                tgt = self._nearest_in_front(10.0)
                 p = Projectile("fireball", PROJECTILE["fireball"]["speed"],
                                PROJECTILE["fireball"]["damage"], w.player_bearing)
                 w.projectiles.append(p)
@@ -940,17 +998,17 @@ class Game:
             return
 
         if st == "Credits":
-            if is_action("menu_right", ev):
+            if is_action("menu_right", ev) or is_action("menu_down", ev):
                 if self.credits_page < self.credits_pages - 1:
+                    self.credits_page += 1
                     AUDIO.play_ui("focus")
-                self.credits_page = min(self.credits_pages - 1, self.credits_page + 1)
-                SPEECH.say("Page %d" % (self.credits_page + 1))
-            elif is_action("menu_left", ev):
+                self.speak_credits()          # reads the FULL page content
+            elif is_action("menu_left", ev) or is_action("menu_up", ev):
                 if self.credits_page > 0:
+                    self.credits_page -= 1
                     AUDIO.play_ui("focus")
-                self.credits_page = max(0, self.credits_page - 1)
-                SPEECH.say("Page %d" % (self.credits_page + 1))
-            elif is_action("back", ev) or is_action("pause", ev) or is_action("confirm", ev):
+                self.speak_credits()
+            elif is_action("confirm", ev) or is_action("back", ev) or is_action("pause", ev):
                 AUDIO.play_ui("back")
                 self.back_to_menu()
             return
@@ -1135,9 +1193,11 @@ class Game:
                 center(("> " if i == self.settings_index else "") + v, y, col=col)
                 y += 45
         elif self.state == "Credits":
-            center("Credits - page %d of %d" % (self.credits_page + 1, self.credits_pages), 200, big)
-            center("Original game by Kikiriki Games (2022)", 260, col=(160, 150, 130))
-            center("Python port generated by reverse engineering", 290, col=(160, 150, 130))
+            center("Credits - page %d of %d" % (self.credits_page + 1, self.credits_pages), 120, big)
+            y = 200
+            for line in textwrap.wrap(self.CREDITS_TEXT[self.credits_page], 62)[:7]:
+                center(line, y, col=(170, 160, 140))
+                y += 28
         elif self.state in ("Level", "LevelIntro", "LevelOutro") and w:
             if w.endless:
                 center("Endless battle - wave %d" % w.tier, 30, col=(255, 215, 100))

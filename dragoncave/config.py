@@ -91,7 +91,8 @@ ENEMY_STATS = {
 # ("delay" tuple = original (minSpawnDelay, maxSpawnDelay) - including the min>max bug)
 LEVELS = {
     1:  dict(delay=(0, 0),   max_at_once=1, to_spawn=6,  seq=False, enemies=["Goblin"],
-             time=1.0, market=True,  intro="Level 1 Intro",  outro="Level 1 Outro"),
+             time=1.0, market=True,  intro="Level 1 Intro",  outro="Level 1 Outro",
+             introduction=True),   # original useIntroduction: tutorial voice after 2 missed shots
     2:  dict(delay=(0, 0),   max_at_once=1, to_spawn=6,  seq=False, enemies=["GoblinFast"],
              time=1.0, market=False, intro="Level 2 Intro",  outro="Level 2 Outro"),
     3:  dict(delay=(0, 0),   max_at_once=1, to_spawn=7,  seq=True,
