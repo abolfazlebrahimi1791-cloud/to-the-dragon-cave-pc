@@ -23,7 +23,9 @@ class Attacker:
     def __init__(self, kind, bearing, level_mods):
         dmg, atk_spd, mov_spd, hp = ENEMY_STATS.get(kind, (10, 2.5, 2.0, 100))
         self.kind = kind
-        self.bearing = bearing           # degrees, -90..90 relative to player facing
+        self.bearing = bearing           # degrees, WORLD bearing (0 = where the
+                                         # player faced at level start)
+        self.world = level_mods          # GameWorld - needed for relative angle
         self.distance = ATTACKER_DISTANCE
         self.damage = dmg
         self.attack_speed = atk_spd
@@ -67,6 +69,16 @@ class Attacker:
         self.snd_attack, self.snd_death, self.snd_injured = a, d, i
         self._walk_channel = None
 
+    def rel_bearing(self):
+        """Bearing RELATIVE to where the player is facing right now.
+        0 = straight ahead (sound centered), negative = left, + = right.
+        Using this for panning is what makes a sound slide to the center
+        when the player turns toward its source (original FMOD behaviour)."""
+        w = self.world
+        if w is None:
+            return self.bearing
+        return self.bearing - w.player_bearing
+
     def start_walk_sound(self):
         if self._walk_channel and self._walk_channel.get_busy():
             return
@@ -85,7 +97,7 @@ class Attacker:
         n = walk_names.get(self.kind)
         n = sfx(n) if n else None
         if n:
-            self._walk_channel = AUDIO.play_at(n, self.bearing, self.distance, 0.8, loop=True)
+            self._walk_channel = AUDIO.play_at(n, self.rel_bearing(), self.distance, 0.8, loop=True)
 
     def stop_walk_sound(self):
         if self._walk_channel:
@@ -94,9 +106,8 @@ class Attacker:
 
     def update_walk_sound(self):
         if self._walk_channel:
-            pan = max(-1.0, min(1.0, math.sin(math.radians(self.bearing))))
+            pan = max(-1.0, min(1.0, math.sin(math.radians(self.rel_bearing()))))
             atten = max(0.03, 1.0 - self.distance / 70.0)
-            self._walk_channel.set_volume(0.8 * atten, 0.8 * atten * 0.0 + 0.8 * atten)
             self._walk_channel.set_volume(0.8 * atten * min(1.0, 1.0 - pan),
                                           0.8 * atten * min(1.0, 1.0 + pan))
 
@@ -116,9 +127,9 @@ class Attacker:
         self.health -= dmg
         if self.health <= 0:
             return True
-        # injured sound
+        # injured sound (relative bearing: tracks the player's facing)
         if self.snd_injured:
-            AUDIO.play_at(self.snd_injured, self.bearing, self.distance, 1.0)
+            AUDIO.play_at(self.snd_injured, self.rel_bearing(), self.distance, 1.0)
         return False
 
 class Projectile:

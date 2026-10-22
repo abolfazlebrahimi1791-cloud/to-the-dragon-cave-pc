@@ -61,10 +61,15 @@ Keys - every key action is one original touch gesture
     Left/Right arrows . turn                             (drag one finger)
     Tab ............... read status: health, ammo, gold  (double tap)
     Enter ............. confirm / select / skip dialogue (tap)
-    Escape ............ pause menu, go back              (system back)
+    Escape ............ pause menu, go back, skip a dialogue (system back)
     F1 ................ read this key list aloud
     Page Up ........... music volume up   (works everywhere)
     Page Down ......... music volume down (works everywhere)
+
+Menus: Escape goes back from every submenu (level select, settings,
+credits). In Settings, move to the "Back" item and press Enter - or
+just press Escape - to return to the main menu. The theme song keeps
+playing when you return from a submenu.
 
 The pause menu offers Resume, Restart level and Main menu
 (up/down arrows to choose, Enter to activate, Escape to resume).
@@ -98,11 +103,14 @@ Accessibility notes
 -------------------
 The game is fully audible: enemies are positioned in real stereo, they
 approach from up to 60 degrees to the left or right, and you have one
-second after hearing an enemy attack to dodge or strike. All menus,
-intro/outro dialogues and status information are spoken in English.
-The theme song plays in the main menu and the final song in the credits;
-adjust the music volume any time with Page Up / Page Down (announced
-aloud, saved in save.json).
+second after hearing an enemy attack to dodge or strike. The stereo
+position of every enemy sound (footsteps, attacks, injuries, deaths)
+follows your facing in real time - turn toward a sound and it slides
+to the center of your head, exactly like the original FMOD audio.
+All menus, intro/outro dialogues and status information are spoken in
+English. The theme song plays in the main menu and the final song in
+the credits; adjust the music volume any time with Page Up / Page Down
+(announced aloud, saved in save.json).
 
 Credits
 -------

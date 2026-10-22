@@ -28,6 +28,7 @@ class AudioEngine:
         self.heartbeat_channel = None
         self.sfx_channels = []
         self.ready = False
+        self.current_music = None       # name of the track on music_channel
 
     def init(self):
         if not pygame.mixer.get_init():
@@ -102,6 +103,7 @@ class AudioEngine:
             return None
         self.music_channel.set_volume(volume)
         self.music_channel.play(snd, loops=-1 if loop else 0)
+        self.current_music = name
         return self.music_channel
 
     def set_music_volume(self, volume):
@@ -115,6 +117,7 @@ class AudioEngine:
     def stop_music(self):
         if self.music_channel:
             self.music_channel.stop()
+        self.current_music = None
 
     # menu / UI sounds from the original game's UI bank
     UI_SOUNDS = {

@@ -364,7 +364,7 @@ class Game:
         e.is_dying = True
         e.stop_walk_sound()
         if e.snd_death:
-            AUDIO.play_at(e.snd_death, e.bearing, e.distance, 1.0)
+            AUDIO.play_at(e.snd_death, e.rel_bearing(), e.distance, 1.0)
         if e.extra_reward >= 1:
             SESSION.gold += e.extra_reward
         if w.boss_type == "dragon" and e.kind == "Dragon":
@@ -519,7 +519,7 @@ class Game:
                 if not e.attack_sound_played and e.attack_timer >= 0.0:
                     e.attack_sound_played = True
                     if e.snd_attack:
-                        AUDIO.play_at(e.snd_attack, e.bearing, e.distance, 1.0)
+                        AUDIO.play_at(e.snd_attack, e.rel_bearing(), e.distance, 1.0)
                     e.deal_damage_at = e.attack_timer + 1.0   # DealDamage coroutine: 1s delay
                 if e.deal_damage_at > 0 and e.attack_timer >= e.deal_damage_at:
                     e.attack_sound_played = False
@@ -755,7 +755,7 @@ class Game:
                                    PROJECTILE["lightning"]["damage"], wiz.bearing)
                     p.distance = wiz.distance
                     w.projectiles.append(p)
-                    AUDIO.play_at(sfx("Fire Punch 1", "Blow Torch Stop") or "", wiz.bearing, wiz.distance, 1.0)
+                    AUDIO.play_at(sfx("Fire Punch 1", "Blow Torch Stop") or "", wiz.rel_bearing(), wiz.distance, 1.0)
         elif w.boss_state == "frog":
             w.boss_timer -= dt
             if w.boss_timer <= 0:
@@ -793,7 +793,8 @@ class Game:
                 p = Projectile("dragon_fireball", d["fireball_speed"], d["fireball_damage"], bearing)
                 p.distance = 50.0
                 w.projectiles.append(p)
-                AUDIO.play_at(sfx("BABY BREATHING FIRE 1", "DRAGON BREATHING FIRE 16") or "", bearing, 50, 1.0)
+                AUDIO.play_at(sfx("BABY BREATHING FIRE 1", "DRAGON BREATHING FIRE 16") or "",
+                              bearing - w.player_bearing, 50, 1.0)
 
     # ------------------------------------------------------------- marketplace
     MARKET_ITEMS = ["arrows5", "arrows10", "arrows20", "healPotion", "fireball", "swordUpgrade"]
@@ -908,18 +909,31 @@ class Game:
             return
 
         if st == "Settings":
+            n_items = len(self.SETTINGS_ITEMS)
             if is_action("menu_up", ev):
                 AUDIO.play_ui("focus")
-                self.settings_index = (self.settings_index - 1) % len(self.SETTINGS_ITEMS)
+                self.settings_index = (self.settings_index - 1) % n_items
                 self.speak_settings()
             elif is_action("menu_down", ev):
                 AUDIO.play_ui("focus")
-                self.settings_index = (self.settings_index + 1) % len(self.SETTINGS_ITEMS)
+                self.settings_index = (self.settings_index + 1) % n_items
                 self.speak_settings()
             elif is_action("menu_left", ev):
-                self.settings_change(-1)
+                if self.settings_index < n_items - 1:      # no value to change on "Back"
+                    self.settings_change(-1)
+                else:
+                    SPEECH.say("Back")
             elif is_action("menu_right", ev):
-                self.settings_change(1)
+                if self.settings_index < n_items - 1:      # no value to change on "Back"
+                    self.settings_change(1)
+                else:
+                    SPEECH.say("Back")
+            elif is_action("confirm", ev):
+                if self.settings_index >= n_items - 1:     # Enter on the "Back" item
+                    AUDIO.play_ui("back")
+                    self.back_to_menu()
+                else:
+                    self.speak_settings()                  # repeat the current setting
             elif is_action("back", ev) or is_action("pause", ev):
                 AUDIO.play_ui("back")
                 self.back_to_menu()
@@ -967,7 +981,13 @@ class Game:
 
         if st in ("Level", "LevelIntro", "LevelOutro"):
             if st in ("LevelIntro", "LevelOutro"):
+                # Enter skips the dialogue; Escape also goes back/skips
                 if is_action("confirm", ev):
+                    AUDIO.stop_story()
+                    if self.dialogue and self.dialogue[1]:
+                        self.dialogue[1]()
+                elif is_action("back", ev) or is_action("pause", ev):
+                    AUDIO.play_ui("back")
                     AUDIO.stop_story()
                     if self.dialogue and self.dialogue[1]:
                         self.dialogue[1]()
@@ -1025,6 +1045,11 @@ class Game:
                 AUDIO.stop_story()
                 if self.dialogue and self.dialogue[1]:
                     self.dialogue[1]()
+            elif is_action("back", ev) or is_action("pause", ev):
+                AUDIO.play_ui("back")
+                AUDIO.stop_story()
+                if self.dialogue and self.dialogue[1]:
+                    self.dialogue[1]()
             return
 
     def back_to_menu(self):
@@ -1033,7 +1058,11 @@ class Game:
         AUDIO.stop_story()
         AUDIO.stop_all_sfx()
         AUDIO.play_heartbeat(0)
-        self.play_menu_music()
+        # keep the theme song playing if it already is (Settings -> Back etc.),
+        # otherwise start it (coming from Credits / Loose / ...)
+        if AUDIO.current_music != self.THEME_SONG or not AUDIO.music_busy():
+            AUDIO.stop_music()
+            self.play_menu_music()
         self.set_state("Menu")
         self.menu_index = 0
         self.speak_menu(self.MENU_ITEMS, self.menu_index, "Main menu")
