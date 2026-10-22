@@ -25,6 +25,16 @@ be edited freely - defaults chosen by the user:
     Enter ..................... confirm / select / skip dialogue
     Escape .................... pause menu / go back
     F1 ........................ read the key list aloud
+    Page Up / Page Down ....... music volume up / down (works everywhere)
+
+Audio:
+    All 807 sounds ship from the ORIGINAL FMOD banks. Every voice line
+    (level intros/outros, the 4 ending stories, the tutorial and the
+    theme song) comes from the dedicated English voice banks
+    (StoryMultiLang_English / Introduction_English) - English only,
+    the Czech/German/Polish voice files are never used. Menus play the
+    game's original UI sounds (focus / click / open / close / error /
+    purchase) and the theme song plays in the menu.
 
 Speech output:
     Windows : accessible_output2 (NVDA / JAWS / SAPI), then pyttsx3
@@ -131,12 +141,14 @@ class Speaker:
             try:
                 from accessible_output2.outputs.auto import Auto
                 self.speaker = Auto()
+                self._force_english_ao2()
             except Exception:
                 self.speaker = None
         if self.orca is None and self.speaker is None:
             try:
                 import pyttsx3
                 self.engine = pyttsx3.init()
+                self._force_english_pyttsx3()
                 self.engine.startLoop(False)
                 self._tts_thread = threading.Thread(target=self._tts_loop, daemon=True)
                 self._tts_thread.start()
@@ -146,6 +158,64 @@ class Speaker:
             self.speaker = _DummySpeaker()
         self._last_text = None
         self._last_time = 0.0
+
+    def _force_english_ao2(self):
+        """Best-effort: if accessible_output2 uses SAPI, select an English voice.
+        Fully guarded - if anything differs, the default voice is kept."""
+        try:
+            spk = self.speaker
+            out = None
+            if hasattr(spk, "get_first_available_output"):
+                out = spk.get_first_available_output()
+            if out is None:
+                outs = getattr(spk, "outputs", None)
+                if outs:
+                    try:
+                        vals = list(outs.values())
+                    except Exception:
+                        vals = list(outs)
+                    out = vals[0] if vals else None
+            if out is None:
+                return
+            name = (type(out).__name__ or "").lower()
+            mod = (type(out).__module__ or "").lower()
+            if "sapi" not in name and "sapi" not in mod:
+                return  # NVDA/JAWS read the text with the user's screen reader anyway
+            voices = None
+            for m in ("list_voices", "voices"):
+                if hasattr(out, m):
+                    try:
+                        voices = getattr(out, m)()
+                        break
+                    except Exception:
+                        voices = None
+            if not voices:
+                return
+            pairs = list(voices.items()) if isinstance(voices, dict) \
+                else [(None, v) for v in voices]
+            for vid, desc in pairs:
+                d = str(desc).lower()
+                if "english" in d or d.startswith("en-us") or d.startswith("en-gb") \
+                        or "microsoft david" in d or "microsoft zira" in d:
+                    try:
+                        out.voice = vid if vid is not None else desc
+                    except Exception:
+                        pass
+                    return
+        except Exception:
+            pass
+
+    def _force_english_pyttsx3(self):
+        try:
+            eng = self.engine
+            for v in eng.getProperty("voices"):
+                nm = (getattr(v, "name", "") or "").lower()
+                vid = str(getattr(v, "id", "") or "").lower()
+                if "english" in nm or "en_us" in vid or "en-us" in vid or "en_gb" in vid:
+                    eng.setProperty("voice", v.id)
+                    return
+        except Exception:
+            pass
 
     def _tts_loop(self):
         while True:
@@ -352,7 +422,7 @@ CROSSBOW_ATTACK_SPEED = 2.2
 SWORD_ATTACK_SPEED = 0.8
 
 # Language names supported by the original game
-LANGUAGES = ["English", "German", "Czech", "Polish"]
+LANGUAGES = ["English"]   # English-only build: voices ship as the English banks
 LANG_SUFFIX = {"English": "en", "German": "de", "Czech": "cs", "Polish": "pl"}
 
 # ----------------------------------------------------------------------------
@@ -415,6 +485,8 @@ CONTROLS_DEFAULT = {
     "menu_down":  ["DOWN"],
     "menu_left":  ["LEFT"],
     "menu_right": ["RIGHT"],
+    "volume_up":   ["PAGEUP"],     # music louder
+    "volume_down": ["PAGEDOWN"],   # music quieter
 }
 
 _GESTURE_DOCS = {
@@ -435,6 +507,8 @@ _GESTURE_DOCS = {
     "menu_down":  "Menu navigation: next item",
     "menu_left":  "Menu navigation: left / decrease",
     "menu_right": "Menu navigation: right / increase",
+    "volume_up":   "Music volume up (Page Up)",
+    "volume_down": "Music volume down (Page Down)",
 }
 
 def _write_controls(cfg):
@@ -512,6 +586,8 @@ _ACTION_LABELS = [
     ("back", "go back"),
     ("pause", "pause"),
     ("help", "this help"),
+    ("volume_up", "music volume up"),
+    ("volume_down", "music volume down"),
 ]
 
 def help_text():
@@ -611,9 +687,33 @@ class AudioEngine:
         self.music_channel.play(snd, loops=-1 if loop else 0)
         return self.music_channel
 
+    def set_music_volume(self, volume):
+        """Live volume change (Page Up / Page Down)."""
+        if self.music_channel:
+            self.music_channel.set_volume(max(0.0, min(1.0, volume)))
+
+    def music_busy(self):
+        return self.music_channel is not None and self.music_channel.get_busy()
+
     def stop_music(self):
         if self.music_channel:
             self.music_channel.stop()
+
+    # menu / UI sounds from the original game's UI bank
+    UI_SOUNDS = {
+        "focus":  ("Focus Enter",),
+        "select": ("Click", "Interact"),
+        "open":   ("Popup Open",),
+        "back":   ("Popup Close",),
+        "error":  ("Negative",),
+        "buy":    ("ItemPurchased",),
+    }
+
+    def play_ui(self, kind, volume=0.9):
+        for n in self.UI_SOUNDS.get(kind, ()):
+            if self.play(n, volume):
+                return True
+        return False
 
     def play_heartbeat(self, intensity):
         """intensity 0..1 -> heartbeat volume (Health 'Health' FMOD param)"""
@@ -641,8 +741,10 @@ def sfx(*names):
             return n
     return None
 
-def sfx_lang(base, suffix):
-    for n in (base + "_" + suffix, base + "_en", base + "_cs", base):
+def sfx_lang(base, suffix="en"):
+    """English-only: prefer the _en voice file, then the unsuffixed one.
+    Never falls back to Czech/German/Polish voice files."""
+    for n in (base + "_en", base):
         if os.path.exists(os.path.join(AUDIO_DIR, n + ".ogg")):
             return n
     return None
@@ -700,6 +802,10 @@ class GameSessionData:
                     setattr(self, k, v)
         except Exception:
             pass
+        # English-only build: always force English voice + sane music volume
+        self.language = "English"
+        if not isinstance(self.soundtrack_volume, int) or self.soundtrack_volume <= 0:
+            self.soundtrack_volume = 100
 
 SESSION = GameSessionData()
 
@@ -1017,7 +1123,7 @@ class GameWorld:
 class Game:
     MENU_ITEMS = ["New game", "Continue game", "Play a level", "Endless battle",
                   "Settings", "Credits", "Quit game"]
-    SETTINGS_ITEMS = ["Difficulty", "Language", "Soundtrack volume", "Back"]
+    SETTINGS_ITEMS = ["Difficulty", "Soundtrack volume", "Back"]
 
     def __init__(self):
         self.state = "Splash"
@@ -1039,13 +1145,21 @@ class Game:
         self.credits_pages = 5
 
     # ------------------------------------------------------------------ flow
+    THEME_SONG = "Kikiriki Dragons Cave 1C - English Vocals "   # trailing space is part of the filename
+
+    def music_vol(self, base=0.8):
+        return base * SESSION.soundtrack_volume / 100.0
+
+    def play_menu_music(self, base=0.8, loop=True):
+        return AUDIO.play_music(self.THEME_SONG, self.music_vol(base), loop=loop)
+
     def start(self):
         SESSION.load()
         AUDIO.init()
         pygame.display.set_caption("To the Dragon Cave")
-        AUDIO.play_music(sfx("277297__heirloomsound__fantasy-ambience", "Ambient 14") or "", 0.5 * SESSION.soundtrack_volume / 100.0)
+        self.play_menu_music()
         self.set_state("Splash")
-        SPEECH.say("To the Dragon Cave. Press enter to continue.")
+        SPEECH.say("To the Dragon Cave. Music volume Page Up Page Down. Press enter to continue.")
 
     def set_state(self, s):
         self.state = s
@@ -1058,6 +1172,7 @@ class Game:
     # ------------------------------------------------------------------ menu
     def menu_activate(self):
         idx = self.menu_index
+        AUDIO.play_ui("select")
         if idx == 0:   # New game
             SESSION.gameFinished = False
             SESSION.level = 1
@@ -1076,6 +1191,7 @@ class Game:
             if SESSION.level > 1 or SESSION.playerHealth < 100:
                 self.launch_level(SESSION.level)
             else:
+                AUDIO.play_ui("error")
                 SPEECH.say("No game in progress. Start a new game first.")
         elif idx == 2:  # Play a level
             self.set_state("PlayLevel")
@@ -1085,6 +1201,7 @@ class Game:
             if SESSION.endlessBattleUnlocked or SESSION.gameFinished:
                 self.launch_level(None, endless=True)
             else:
+                AUDIO.play_ui("error")
                 SPEECH.say("Endless battle is locked. Finish the story first.")
         elif idx == 4:
             self.set_state("Settings")
@@ -1108,27 +1225,22 @@ class Game:
             names = ["Easy", "Normal", "Hard"]
             SPEECH.say("Difficulty: " + names[SESSION.difficulty] + ". Left right to change.")
         elif idx == 1:
-            SPEECH.say("Language: " + SESSION.language + ". Left right to change.")
-        elif idx == 2:
-            SPEECH.say("Soundtrack volume: %d percent. Left right to change." % SESSION.soundtrack_volume)
+            SPEECH.say("Soundtrack volume: %d percent. Left right to change. You can also use Page Up and Page Down anywhere." % SESSION.soundtrack_volume)
         else:
             SPEECH.say("Back")
 
     def settings_change(self, delta):
         idx = self.settings_index
+        AUDIO.play_ui("select", 0.6)
         if idx == 0:
             SESSION.difficulty = max(0, min(2, SESSION.difficulty + delta))
             names = ["Easy", "Normal", "Hard"]
             SPEECH.say(names[SESSION.difficulty])
         elif idx == 1:
-            i = LANGUAGES.index(SESSION.language) if SESSION.language in LANGUAGES else 0
-            SESSION.language = LANGUAGES[(i + delta) % len(LANGUAGES)]
-            SPEECH.say(SESSION.language)
-        elif idx == 2:
             SESSION.soundtrack_volume = max(0, min(100, SESSION.soundtrack_volume + delta * 10))
             SPEECH.say("%d percent" % SESSION.soundtrack_volume)
             AUDIO.stop_music()
-            AUDIO.play_music(sfx("277297__heirloomsound__fantasy-ambience", "Ambient 14") or "", 0.5 * SESSION.soundtrack_volume / 100.0)
+            self.play_menu_music()
         SESSION.save()
 
     # ------------------------------------------------------------- level flow
@@ -1140,10 +1252,7 @@ class Game:
         intro = self.world.cfg.get("intro", "Silence")
         self.set_state("LevelIntro")
         if intro and intro != "Silence":
-            suffix = LANG_SUFFIX.get(SESSION.language, "en")
-            name = intro + "_" + suffix
-            if AUDIO.load(name) is None:
-                name = intro
+            name = intro            # English story bank ships unsuffixed files
             self.dialogue = (name, self._begin_level_gameplay)
             AUDIO.play_story(name, self._begin_level_gameplay)
             SPEECH.say("Level %d" % n if n else "Endless battle")
@@ -1223,7 +1332,7 @@ class Game:
             if w.cfg.get("market"):
                 self.set_state("Market")
                 self.market_index = 0
-                AUDIO.play_music(sfx("Marketplace", "277297__heirloomsound__fantasy-ambience") or "", 0.5)
+                AUDIO.play_music("Marketplace", self.music_vol(0.6))
                 self.speak_market()
                 return
             # ProgressToNextLevel
@@ -1235,10 +1344,7 @@ class Game:
             SESSION.save()
             outro = w.cfg.get("outro", "Silence")
             if outro and outro != "Silence":
-                suffix = LANG_SUFFIX.get(SESSION.language, "en")
-                name = outro + "_" + suffix
-                if AUDIO.load(name) is None:
-                    name = outro
+                name = outro            # English story bank ships unsuffixed files
                 self.set_state("LevelOutro")
                 AUDIO.play_story(name, self._goto_next_scene)
             else:
@@ -1246,22 +1352,21 @@ class Game:
         else:
             SESSION.save()
             self.set_state("Loose")
-            AUDIO.play_music(sfx("277297__heirloomsound__fantasy-ambience", "Ambient 14") or "", 0.4)
+            AUDIO.play_music(sfx("277297__heirloomsound__fantasy-ambience", "Ambient 14") or "", 0.4 * SESSION.soundtrack_volume / 100.0)
             SPEECH.say("You died. Press enter to return to the menu.")
 
     def _goto_next_scene(self):
         if SESSION.gameFinished and SESSION.level >= NUMBER_OF_LEVELS:
-            # Outro (4 endings) then credits
+            # Outro (4 endings) then credits - English bank: no language suffix
             self.set_state("Outro")
-            suffix = LANG_SUFFIX.get(SESSION.language, "en")
             if SESSION.frogKilled and SESSION.princeSaved:
-                name = "Outro_FrogKilled_PrinceSaved_" + suffix
+                name = "Outro_FrogKilledPrinceSaved"
             elif SESSION.frogKilled:
-                name = "Outro_FrogKilled_PrinceKilled_" + suffix
+                name = "Outro_FrogKilledPrinceKilled"
             elif SESSION.princeSaved:
-                name = "Outro_FrogSaved_PrinceSaved_" + suffix
+                name = "Outro_FrogSavedPrinceSaved"
             else:
-                name = "Outro_FrogSaved_PrinceKilled_" + suffix
+                name = "Outro_FrogSavedPrinceKilled"
             if AUDIO.load(name) is None:
                 name = "Outro"
             AUDIO.play_story(name, self._goto_credits)
@@ -1271,7 +1376,7 @@ class Game:
     def _goto_credits(self):
         self.set_state("Credits")
         self.credits_page = 0
-        AUDIO.play_music(sfx("277297__heirloomsound__fantasy-ambience", "Ambient 14") or "", 0.5)
+        AUDIO.play_music("Final-song", self.music_vol(0.6), loop=True)
         SPEECH.say("Congratulations! You finished the game. Credits. Left and right to browse, escape for menu.")
 
     def quit(self):
@@ -1294,8 +1399,8 @@ class Game:
             self._sword_hit()
         else:  # Crossbow
             if w.arrows <= 0:
-                AUDIO.play(sfx_lang("crossbow_no_arrows", LANG_SUFFIX.get(SESSION.language, "en")) or "", 1.0)
-                SPEECH.say("No arrows")
+                AUDIO.play_ui("error", 0.8)   # no English voice file exists in the banks -> English TTS + UI cue
+                SPEECH.say("No arrows", interrupt=True)
                 return
             w.attack_ready = now + CROSSBOW_ATTACK_SPEED
             w.arrows -= 1
@@ -1797,10 +1902,12 @@ class Game:
         key = self.MARKET_ITEMS[self.market_index]
         amount, price = MARKET_PRICES[key]
         if SESSION.gold < price:
+            AUDIO.play_ui("error")
             SPEECH.say("Not enough gold")
             return
         if key == "swordUpgrade":
             if SESSION.swordUpgraded:
+                AUDIO.play_ui("error")
                 SPEECH.say("Already purchased")
                 return
             SESSION.swordUpgraded = True
@@ -1812,7 +1919,7 @@ class Game:
             SESSION.crossbowArrows += amount
         SESSION.gold -= price
         SESSION.save()
-        AUDIO.play(sfx("ItemPurchased") or "", 1.0)
+        AUDIO.play_ui("buy", 1.0)
         SPEECH.say("Purchased")
 
     # ------------------------------------------------------------- pause menu
@@ -1842,8 +1949,19 @@ class Game:
             SPEECH.say(help_text(), interrupt=True)
             return
 
+        # global: Page Up / Page Down = music volume (works everywhere)
+        if is_action("volume_up", ev) or is_action("volume_down", ev):
+            up = is_action("volume_up", ev)
+            SESSION.soundtrack_volume = max(0, min(100, SESSION.soundtrack_volume + (10 if up else -10)))
+            SESSION.save()
+            if AUDIO.music_busy():
+                AUDIO.set_music_volume(self.music_vol(0.8))
+            SPEECH.say("Music volume: %d percent" % SESSION.soundtrack_volume, interrupt=True)
+            return
+
         if st == "Splash":
             if is_action("confirm", ev):
+                AUDIO.play_ui("open")
                 self.set_state("Menu")
                 self.menu_index = 0
                 self.speak_menu(self.MENU_ITEMS, self.menu_index, "Main menu")
@@ -1851,9 +1969,11 @@ class Game:
 
         if st == "Menu":
             if is_action("menu_up", ev):
+                AUDIO.play_ui("focus")
                 self.menu_index = (self.menu_index - 1) % len(self.MENU_ITEMS)
                 self.speak_menu(self.MENU_ITEMS, self.menu_index)
             elif is_action("menu_down", ev):
+                AUDIO.play_ui("focus")
                 self.menu_index = (self.menu_index + 1) % len(self.MENU_ITEMS)
                 self.speak_menu(self.MENU_ITEMS, self.menu_index)
             elif is_action("confirm", ev):
@@ -1862,22 +1982,28 @@ class Game:
 
         if st == "PlayLevel":
             if is_action("menu_left", ev):
+                AUDIO.play_ui("focus")
                 self.play_level_index = (self.play_level_index - 1) % NUMBER_OF_LEVELS
                 self.speak_level_select()
             elif is_action("menu_right", ev):
+                AUDIO.play_ui("focus")
                 self.play_level_index = (self.play_level_index + 1) % NUMBER_OF_LEVELS
                 self.speak_level_select()
             elif is_action("confirm", ev):
+                AUDIO.play_ui("select")
                 self.launch_level(self.play_level_index + 1)
             elif is_action("back", ev) or is_action("pause", ev):
+                AUDIO.play_ui("back")
                 self.back_to_menu()
             return
 
         if st == "Settings":
             if is_action("menu_up", ev):
+                AUDIO.play_ui("focus")
                 self.settings_index = (self.settings_index - 1) % len(self.SETTINGS_ITEMS)
                 self.speak_settings()
             elif is_action("menu_down", ev):
+                AUDIO.play_ui("focus")
                 self.settings_index = (self.settings_index + 1) % len(self.SETTINGS_ITEMS)
                 self.speak_settings()
             elif is_action("menu_left", ev):
@@ -1885,35 +2011,45 @@ class Game:
             elif is_action("menu_right", ev):
                 self.settings_change(1)
             elif is_action("back", ev) or is_action("pause", ev):
+                AUDIO.play_ui("back")
                 self.back_to_menu()
             return
 
         if st == "Credits":
             if is_action("menu_right", ev):
+                if self.credits_page < self.credits_pages - 1:
+                    AUDIO.play_ui("focus")
                 self.credits_page = min(self.credits_pages - 1, self.credits_page + 1)
                 SPEECH.say("Page %d" % (self.credits_page + 1))
             elif is_action("menu_left", ev):
+                if self.credits_page > 0:
+                    AUDIO.play_ui("focus")
                 self.credits_page = max(0, self.credits_page - 1)
                 SPEECH.say("Page %d" % (self.credits_page + 1))
             elif is_action("back", ev) or is_action("pause", ev) or is_action("confirm", ev):
+                AUDIO.play_ui("back")
                 self.back_to_menu()
             return
 
         if st == "Loose" or st == "EndlessEnd":
             if is_action("confirm", ev) or is_action("back", ev) or is_action("pause", ev):
+                AUDIO.play_ui("select")
                 self.back_to_menu()
             return
 
         if st == "Market":
             if is_action("menu_up", ev):
+                AUDIO.play_ui("focus")
                 self.market_index = (self.market_index - 1) % len(self.MARKET_ITEMS)
                 self.speak_market()
             elif is_action("menu_down", ev):
+                AUDIO.play_ui("focus")
                 self.market_index = (self.market_index + 1) % len(self.MARKET_ITEMS)
                 self.speak_market()
             elif is_action("confirm", ev):
                 self.market_buy()
             elif is_action("back", ev) or is_action("pause", ev):
+                AUDIO.play_ui("back")
                 AUDIO.stop_music()
                 SESSION.save()
                 self.launch_level(SESSION.level)
@@ -1930,21 +2066,26 @@ class Game:
             if self.pause_menu:
                 n = len(self.PAUSE_ITEMS)
                 if is_action("menu_up", ev):
+                    AUDIO.play_ui("focus")
                     self.pause_index = (self.pause_index - 1) % n
                     SPEECH.say(self.PAUSE_ITEMS[self.pause_index])
                 elif is_action("menu_down", ev):
+                    AUDIO.play_ui("focus")
                     self.pause_index = (self.pause_index + 1) % n
                     SPEECH.say(self.PAUSE_ITEMS[self.pause_index])
                 elif is_action("confirm", ev):
+                    AUDIO.play_ui("select")
                     self.pause_activate()
                 elif is_action("back", ev) or is_action("pause", ev):
                     self.pause_menu = False
+                    AUDIO.play_ui("back")
                     SPEECH.say("Resumed")
                 return
             # gameplay keys (each action = one original touch gesture)
             if is_action("pause", ev):
                 self.pause_menu = True
                 self.pause_index = 0
+                AUDIO.play_ui("open")
                 SPEECH.say("Paused. " + ", ".join(self.PAUSE_ITEMS) +
                            ". Up and down arrows to choose, enter to activate, escape to resume.")
                 return
@@ -1982,7 +2123,7 @@ class Game:
         AUDIO.stop_story()
         AUDIO.stop_all_sfx()
         AUDIO.play_heartbeat(0)
-        AUDIO.play_music(sfx("277297__heirloomsound__fantasy-ambience", "Ambient 14") or "", 0.5 * SESSION.soundtrack_volume / 100.0)
+        self.play_menu_music()
         self.set_state("Menu")
         self.menu_index = 0
         self.speak_menu(self.MENU_ITEMS, self.menu_index, "Main menu")
@@ -2048,7 +2189,7 @@ class Game:
             center("Settings", 60, big)
             y = 150
             names = ["Easy", "Normal", "Hard"]
-            vals = ["Difficulty: " + names[SESSION.difficulty], "Language: " + SESSION.language,
+            vals = ["Difficulty: " + names[SESSION.difficulty],
                     "Soundtrack volume: %d%%" % SESSION.soundtrack_volume, "Back"]
             for i, v in enumerate(vals):
                 col = (255, 215, 100) if i == self.settings_index else (150, 140, 120)

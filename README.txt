@@ -5,8 +5,12 @@ Unofficial PC port of the Android audio game "To the Dragon Cave"
 (IL2CPP dump + FMOD bank extraction + ARM disassembly).
 
 English edition. All 24 story levels, 5 bosses, 4 endings, the endless
-battle mode and the complete original English sound set (807 sounds,
-including the movement / footsteps and all menu sounds) are included.
+battle mode and the complete original English sound set are included:
+807 sounds - every voice line comes from the game's dedicated English
+FMOD voice banks (StoryMultiLang_English + Introduction_English),
+including all level intro/outro narrations, the 4 ending stories and
+the theme song with English vocals. Menu navigation, selection, open,
+close, purchase and error cues use the game's original UI sounds.
 
 Requirements
 ------------
@@ -41,6 +45,8 @@ Keys - every key action is one original touch gesture
     Enter ............. confirm / select / skip dialogue (tap)
     Escape ............ pause menu, go back              (system back)
     F1 ................ read this key list aloud
+    Page Up ........... music volume up   (works everywhere)
+    Page Down ......... music volume down (works everywhere)
 
 The pause menu offers Resume, Restart level and Main menu
 (up/down arrows to choose, Enter to activate, Escape to resume).
@@ -79,6 +85,9 @@ The game is fully audible: enemies are positioned in real stereo, they
 approach from up to 60 degrees to the left or right, and you have one
 second after hearing an enemy attack to dodge or strike. All menus,
 intro/outro dialogues and status information are spoken in English.
+The theme song plays in the main menu and the final song in the credits;
+adjust the music volume any time with Page Up / Page Down (announced
+aloud, saved in save.json).
 
 Credits
 -------
