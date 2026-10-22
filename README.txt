@@ -22,9 +22,11 @@ Requirements
              fallback)
     Linux   : run Orca on your desktop. The game speaks through Orca's
               D-Bus service (org.gnome.Orca.Service, method
-              PresentMessage) - the same D-Bus method used by the
-              nvda2speechd Orca backend. If Orca is not available the
-              game falls back to accessible_output2, then to pyttsx3.
+              PresentMessage) using DASBUS - the same D-Bus method used
+              by the nvda2speechd Orca backend. Install it with
+              "pip install dasbus" (python3-dbus is used as a fallback).
+              If Orca is not available the game falls back to
+              accessible_output2, then to pyttsx3.
 
 Run
 ---
@@ -51,12 +53,9 @@ Keys - every key action is one original touch gesture
 The pause menu offers Resume, Restart level and Main menu
 (up/down arrows to choose, Enter to activate, Escape to resume).
 
-Customizing the keys
---------------------
-All bindings live in "controls.json" next to the program. Edit the
-lists and restart the game. Modifier combos are written like
-"CTRL+SPACE". The same JSON file documents which original touch
-gesture every action replaces.
+The key bindings are fixed constants in the CONTROLS table inside
+dragon_cave.py - every action there documents which original touch
+gesture it replaces.
 
 Player data (JSON)
 ------------------

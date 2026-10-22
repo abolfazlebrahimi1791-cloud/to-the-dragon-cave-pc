@@ -11,8 +11,9 @@ All game data (levels, enemies, weapons, prices, timings) comes from the
 original serialized game data.
 
 Original controls were touch gestures; this port maps them to keyboard.
-All bindings live in controls.json (saved next to the program) and can
-be edited freely - defaults chosen by the user:
+All bindings are fixed constants in this file (the CONTROLS table) -
+every action documents which original gesture it replaces. Defaults
+chosen by the user:
 
     Up arrow .................. attack with current weapon (swipe up)
     Down arrow ................ duck (swipe down; only some levels)
@@ -56,19 +57,18 @@ import queue as queue_mod
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 AUDIO_DIR = os.path.join(BASE_DIR, "audio")
-# Player save data = plain JSON files next to the program:
+# Player save data = plain JSON file next to the program:
 #   save.json     - full GameSession (progress, gold, difficulty, ...)
-#   controls.json - key bindings (one action per original touch gesture)
 GAME_SESSION_FILE = os.path.join(BASE_DIR, "save.json")
-CONTROLS_FILE = os.path.join(BASE_DIR, "controls.json")
 
 # ----------------------------------------------------------------------------
 # Speech output.
 #   Windows : accessible_output2 (NVDA/JAWS/SAPI) -> pyttsx3 -> dummy
-#   Linux   : Orca over D-Bus (org.gnome.Orca.Service) -> accessible_output2
-#             -> pyttsx3 -> dummy
+#   Linux   : Orca over D-Bus (org.gnome.Orca.Service) via DASBUS
+#             (python3-dbus fallback) -> accessible_output2 -> pyttsx3 -> dummy
 #
-# The Linux backend mirrors the Rust nvda2speechd-style Orca backend:
+# The Linux backend mirrors the Rust nvda2speechd-style Orca backend
+# (zbus sample):
 #   service    org.gnome.Orca.Service
 #   path       /org/gnome/Orca/Service
 #   interface  org.gnome.Orca.Service
@@ -79,38 +79,53 @@ CONTROLS_FILE = os.path.join(BASE_DIR, "controls.json")
 # ----------------------------------------------------------------------------
 class _OrcaDBus:
     """Speak through the running Orca screen reader via D-Bus.
-    Tries python3-dbus first, then dasbus."""
+
+    Mirrors the Rust nvda2speechd-style Orca backend (zbus sample):
+        service    org.gnome.Orca.Service
+        path       /org/gnome/Orca/Service
+        interface  org.gnome.Orca.Service
+        method     PresentMessage(s: text) -> bool
+          - speak text   : PresentMessage(text)
+          - cancel speech: PresentMessage("")
+        Braille messages are intentionally ignored.
+
+    Primary implementation uses dasbus (the sample code below), with a
+    python3-dbus fallback for systems that ship only python3-dbus."""
+    SERVICE = "org.gnome.Orca.Service"
+    PATH = "/org/gnome/Orca/Service"
+
     def __init__(self):
-        self._obj = None
-        self._iface = "org.gnome.Orca.Service"
-        self._proxy = None
-        try:
-            import dbus  # python3-dbus
-            bus = dbus.SessionBus()
-            self._obj = bus.get_object("org.gnome.Orca.Service",
-                                       "/org/gnome/Orca/Service")
-            # probe with a cancel (same trick the Rust backend uses)
-            self._obj.PresentMessage("", dbus_interface=self._iface)
-            return
-        except Exception:
-            self._obj = None
+        self._proxy = None      # dasbus proxy (primary)
+        self._obj = None        # python3-dbus object (fallback)
+        self._iface = self.SERVICE
+        # --- primary: dasbus (sample style) ---
         try:
             from dasbus.connection import SessionMessageBus
-            self._proxy = SessionMessageBus().get_proxy(
-                "org.gnome.Orca.Service", "/org/gnome/Orca/Service")
-            self._proxy.PresentMessage("")
+            proxy = SessionMessageBus().get_proxy(self.SERVICE, self.PATH)
+            proxy.PresentMessage("")     # probe = cancel, like the Rust backend
+            self._proxy = proxy
+            return
         except Exception:
             self._proxy = None
+        # --- fallback: python3-dbus ---
+        try:
+            import dbus
+            bus = dbus.SessionBus()
+            obj = bus.get_object(self.SERVICE, self.PATH)
+            obj.PresentMessage("", dbus_interface=self._iface)
+            self._obj = obj
+        except Exception:
+            self._obj = None
 
     def ok(self):
-        return self._obj is not None or self._proxy is not None
+        return self._proxy is not None or self._obj is not None
 
     def say(self, text, interrupt=True):
         try:
-            if self._obj is not None:
-                self._obj.PresentMessage(text, dbus_interface=self._iface)
-            else:
+            if self._proxy is not None:
                 self._proxy.PresentMessage(text)
+            elif self._obj is not None:
+                self._obj.PresentMessage(text, dbus_interface=self._iface)
         except Exception:
             pass
 
@@ -326,79 +341,79 @@ ENEMY_STATS = {
 # ("delay" tuple = original (minSpawnDelay, maxSpawnDelay) - including the min>max bug)
 LEVELS = {
     1:  dict(delay=(0, 0),   max_at_once=1, to_spawn=6,  seq=False, enemies=["Goblin"],
-             time=1.0, market=True,  intro="Level_1_Intro",  outro="Level_1_Outro"),
+             time=1.0, market=True,  intro="Level 1 Intro",  outro="Level 1 Outro"),
     2:  dict(delay=(0, 0),   max_at_once=1, to_spawn=6,  seq=False, enemies=["GoblinFast"],
-             time=1.0, market=False, intro="Level_2_Intro",  outro="Level_2_Outro"),
+             time=1.0, market=False, intro="Level 2 Intro",  outro="Level 2 Outro"),
     3:  dict(delay=(0, 0),   max_at_once=1, to_spawn=7,  seq=True,
              enemies=["Goblin", "GoblinFast", "Goblin", "GoblinFast", "GoblinFast", "Goblin", "Goblin"],
-             time=1.0, market=False, intro="Level_3_Intro",  outro="Level_3_Outro"),
+             time=1.0, market=False, intro="Level 3 Intro",  outro="Level 3 Outro"),
     4:  dict(delay=(10, 2),  max_at_once=2, to_spawn=10, seq=True,
              enemies=["Goblin", "GoblinFast", "Goblin", "Goblin", "GoblinFast", "GoblinFast",
                       "GoblinFast", "Goblin", "GoblinFast", "Goblin"],
-             time=1.0, market=False, intro="Level_4_Intro",  outro="Silence"),
+             time=1.0, market=False, intro="Level 4 Intro",  outro="Silence"),
     5:  dict(delay=(6, 10),  max_at_once=2, to_spawn=0,  seq=False, enemies=[],
-             time=60.0, market=False, intro="Level_5_Intro",  outro="Level_5_Outro",
+             time=60.0, market=False, intro="Level 5 Intro",  outro="Level 5 Outro",
              boss="troll", troll=dict(damage=35, attack_duration=3.2, move_speed=1.0,
                                       next_min=5.0, next_max=10.0, lifetime=60.0, move_window=1.3)),
     6:  dict(delay=(10, 2),  max_at_once=2, to_spawn=10, seq=False, enemies=["Harpy"],
-             time=1.0, market=False, intro="Level_6_Intro",  outro="Level_6_Outro"),
+             time=1.0, market=False, intro="Level 6 Intro",  outro="Level 6 Outro"),
     7:  dict(delay=(5, 7),   max_at_once=2, to_spawn=14, seq=True,
              enemies=["Werewolf", "Harpy"] * 7,
-             time=1.0, market=False, intro="Level_7_Intro",  outro="Level_7_Outro"),
+             time=1.0, market=False, intro="Level 7 Intro",  outro="Level 7 Outro"),
     8:  dict(delay=(6, 10),  max_at_once=2, to_spawn=0,  seq=False, enemies=[],
-             time=120.0, market=False, intro="Level_8_Intro", outro="Silence",
+             time=120.0, market=False, intro="Level 8 Intro", outro="Silence",
              boss="snakes", snakes=dict(damage=20, attack_duration=2.0, next_min=4.0,
                                         next_max=8.0, move_window=2.0)),
     9:  dict(delay=(1, 1),   max_at_once=1, to_spawn=6,  seq=False, enemies=["Spider"],
-             time=1.0, market=False, intro="Level_9_Intro",  outro="Level_9_Outro"),
+             time=1.0, market=False, intro="Level 9 Intro",  outro="Level 9 Outro"),
     10: dict(delay=(1, 1),   max_at_once=1, to_spawn=6,  seq=False, enemies=["MageApprentice"],
-             time=1.0, market=False, intro="Level_10_Intro", outro="Level_10_Outro"),
+             time=1.0, market=False, intro="Level 10 Intro", outro="Level 10 Outro"),
     11: dict(delay=(4, 6),   max_at_once=2, to_spawn=10, seq=True,
              enemies=["MageApprentice", "Spider", "MageApprentice", "MageApprentice", "Spider",
                       "MageApprentice", "Spider", "Spider", "MageApprentice", "MageApprentice"],
-             time=1.0, market=False, intro="Level_11_Intro", outro="Silence"),
+             time=1.0, market=False, intro="Level 11 Intro", outro="Silence"),
     12: dict(delay=(1, 1),   max_at_once=1, to_spawn=1,  seq=False, enemies=["Wizard"],
-             time=1.0, market=False, intro="Level_12_Intro", outro="Level_12_Outro",
+             time=1.0, market=False, intro="Level 12 Intro", outro="Level 12 Outro",
              boss="wizard", allow_crouch=True, crouch_time=4.0, rot_clamp=80.0),
     13: dict(delay=(1, 1),   max_at_once=1, to_spawn=6,  seq=False, enemies=["Treant"],
-             time=1.0, market=False, intro="Level_13_Intro", outro="Level_13_Outro"),
+             time=1.0, market=False, intro="Level 13 Intro", outro="Level 13 Outro"),
     14: dict(delay=(5, 5),   max_at_once=2, to_spawn=8,  seq=True,
              enemies=["Treant", "Goblin", "Goblin", "Goblin", "Treant", "Goblin", "Goblin",
                       "Treant", "Goblin", "Goblin"],
-             time=1.0, market=False, intro="Level_14_Intro", outro="Level_14_Outro"),
+             time=1.0, market=False, intro="Level 14 Intro", outro="Level 14 Outro"),
     15: dict(delay=(5, 5),   max_at_once=2, to_spawn=8,  seq=True,
              enemies=["TreantStronger", "Goblin", "Goblin", "TreantStronger", "Goblin", "Goblin",
                       "Goblin", "TreantStronger"],
-             time=1.0, market=False, intro="Level_15_Intro", outro="Level_15_Outro"),
+             time=1.0, market=False, intro="Level 15 Intro", outro="Level 15 Outro"),
     16: dict(delay=(1, 1),   max_at_once=1, to_spawn=10, seq=False, enemies=["Kelpie"],
-             time=1.0, market=False, intro="Level_16_Intro", outro="Level_16_Outro"),
+             time=1.0, market=False, intro="Level 16 Intro", outro="Level 16 Outro"),
     17: dict(delay=(6, 10),  max_at_once=2, to_spawn=0,  seq=False, enemies=[],
-             time=120.0, market=False, intro="Level_17_Intro", outro="Silence",
+             time=120.0, market=False, intro="Level 17 Intro", outro="Silence",
              boss="waves", waves=dict(damage=20, attack_duration=5.0, next_min=8.0,
                                       next_max=10.0, move_window=4.0)),
     18: dict(delay=(1, 1),   max_at_once=1, to_spawn=0,  seq=False, enemies=[],
-             time=3600.0, market=False, intro="Level_18_Intro", outro="Level_18_Outro",
+             time=3600.0, market=False, intro="Level 18 Intro", outro="Level 18 Outro",
              boss="kraken", kraken=dict(pause=12.0, tentacles=6, tentacle_hp=10,
                                         tentacle_damage=20, attack_speed=2.0,
                                         waterball_speed=80.0, waterball_damage=20)),
     19: dict(delay=(1, 1),   max_at_once=1, to_spawn=8,  seq=True,
              enemies=["Snowhund", "Mammoth", "Snowhund", "Snowhund", "Mammoth", "Snowhund",
                       "Mammoth", "Mammoth"],
-             time=1.0, market=False, intro="Level_19_Intro", outro="Level_19_Outro"),
+             time=1.0, market=False, intro="Level 19 Intro", outro="Level 19 Outro"),
     20: dict(delay=(5, 6),   max_at_once=2, to_spawn=12, seq=True,
              enemies=["Snowhund", "Snowhund", "Mammoth", "Snowhund", "Mammoth", "Snowhund",
                       "Snowhund", "Mammoth", "Snowhund", "Snowhund", "Snowhund", "Mammoth"],
-             time=1.0, market=False, intro="Level_20_Intro", outro="Level_20_Outro"),
+             time=1.0, market=False, intro="Level 20 Intro", outro="Level 20 Outro"),
     21: dict(delay=(0, 0),   max_at_once=1, to_spawn=0,  seq=False, enemies=[],
-             time=1.0, market=True,  intro="Level_21_Intro", outro="Silence",
+             time=1.0, market=True,  intro="Level 21 Intro", outro="Silence",
              allow_crouch=True, crouch_time=4.0, rot_clamp=80.0),
     22: dict(delay=(4, 6),   max_at_once=2, to_spawn=16, seq=True,
              enemies=(["Wight", "Wraith"] * 8),
-             time=1.0, market=False, intro="Level_22_Intro", outro="Level_22_Outro"),
+             time=1.0, market=False, intro="Level 22 Intro", outro="Level 22 Outro"),
     23: dict(delay=(0, 0),   max_at_once=1, to_spawn=1,  seq=False, enemies=["YoungDragon"],
-             time=1.0, market=False, intro="Level_23_Intro", outro="Level_23_Outro"),
+             time=1.0, market=False, intro="Level 23 Intro", outro="Level 23 Outro"),
     24: dict(delay=(0, 0),   max_at_once=1, to_spawn=1,  seq=True,  enemies=["Dragon"],
-             time=1.0, market=False, intro="Level_24_Intro", outro="Level_24_Outro",
+             time=1.0, market=False, intro="Level 24 Intro", outro="Level 24 Outro",
              boss="dragon", allow_crouch=True, crouch_time=4.0,
              dragon=dict(heads=3, hp=1500, damage=50, attack_speed=6.0, move_speed=1.2,
                          fireball_speed=500.0, fireball_damage=30)),
@@ -423,7 +438,6 @@ SWORD_ATTACK_SPEED = 0.8
 
 # Language names supported by the original game
 LANGUAGES = ["English"]   # English-only build: voices ship as the English banks
-LANG_SUFFIX = {"English": "en", "German": "de", "Czech": "cs", "Polish": "pl"}
 
 # ----------------------------------------------------------------------------
 # Audio engine (pygame mixer with stereo positioning, like FMOD in the original)
@@ -431,7 +445,7 @@ LANG_SUFFIX = {"English": "en", "German": "de", "Czech": "cs", "Polish": "pl"}
 import pygame
 
 # ----------------------------------------------------------------------------
-# Key bindings (controls.json next to the program).
+# Key bindings - fixed constants in the CONTROLS table above.
 # Every action is the keyboard equivalent of one original touch gesture.
 # Modifiers can be combined, e.g. "CTRL+SPACE".
 # ----------------------------------------------------------------------------
@@ -467,75 +481,33 @@ def _keys_by_name(name):
             return [getattr(pygame, "K_" + cand)]
     return []
 
-CONTROLS_DEFAULT = {
-    "attack":     ["UP"],           # original gesture: swipe up, one finger
-    "crouch":     ["DOWN"],         # original gesture: swipe down, one finger
-    "crossbow":   ["SPACE"],        # original gesture: swipe left, two fingers
-    "sword":      ["CTRL+SPACE"],   # original gesture: swipe right, two fingers
-    "potion":     ["P"],            # original gesture: swipe up, two fingers
-    "fireball":   ["F"],            # original gesture: shake the phone
-    "turn_left":  ["LEFT"],         # original gesture: drag one finger left
-    "turn_right": ["RIGHT"],        # original gesture: drag one finger right
-    "confirm":    ["ENTER"],        # original gesture: tap
-    "back":       ["ESCAPE"],       # original gesture: system back
-    "pause":      ["ESCAPE"],
-    "help":       ["F1"],
-    "status":     ["TAB"],          # original gesture: double tap
-    "menu_up":    ["UP"],
-    "menu_down":  ["DOWN"],
-    "menu_left":  ["LEFT"],
-    "menu_right": ["RIGHT"],
-    "volume_up":   ["PAGEUP"],     # music louder
-    "volume_down": ["PAGEDOWN"],   # music quieter
+CONTROLS = {
+    # action: list of keys. Modifier combos are written like "CTRL+SPACE".
+    # Every action replaces one original touch gesture.
+    "attack":      ["UP"],           # gesture: swipe up, one finger
+    "crouch":      ["DOWN"],         # gesture: swipe down, one finger (levels 12, 21, 24)
+    "crossbow":    ["SPACE"],        # gesture: swipe left, two fingers
+    "sword":       ["CTRL+SPACE"],   # gesture: swipe right, two fingers
+    "potion":      ["P"],            # gesture: swipe up, two fingers
+    "fireball":    ["F"],            # gesture: shake the phone
+    "turn_left":   ["LEFT"],         # gesture: drag one finger left
+    "turn_right":  ["RIGHT"],        # gesture: drag one finger right
+    "confirm":     ["ENTER"],        # gesture: tap
+    "back":        ["ESCAPE"],       # gesture: system back
+    "pause":       ["ESCAPE"],
+    "help":        ["F1"],
+    "status":      ["TAB"],          # gesture: double tap
+    "menu_up":     ["UP"],
+    "menu_down":   ["DOWN"],
+    "menu_left":   ["LEFT"],
+    "menu_right":  ["RIGHT"],
+    "volume_up":   ["PAGEUP"],       # music louder (works everywhere)
+    "volume_down": ["PAGEDOWN"],     # music quieter (works everywhere)
 }
 
-_GESTURE_DOCS = {
-    "attack":     "Original gesture: swipe up with one finger - attack with the current weapon",
-    "crouch":     "Original gesture: swipe down with one finger - crouch (levels 12, 21, 24)",
-    "crossbow":   "Original gesture: swipe left with two fingers - draw the crossbow",
-    "sword":      "Original gesture: swipe right with two fingers - draw the sword",
-    "potion":     "Original gesture: swipe up with two fingers - drink a healing potion",
-    "fireball":   "Original gesture: shake the phone - throw a fireball",
-    "turn_left":  "Original gesture: drag one finger to the left - turn left",
-    "turn_right": "Original gesture: drag one finger to the right - turn right",
-    "confirm":    "Original gesture: tap - confirm / select in menus",
-    "back":       "Original gesture: system back - leave the current menu",
-    "pause":      "Open the pause menu",
-    "help":       "Read the key list aloud",
-    "status":     "Original gesture: double tap - read health, arrows, gold",
-    "menu_up":    "Menu navigation: previous item",
-    "menu_down":  "Menu navigation: next item",
-    "menu_left":  "Menu navigation: left / decrease",
-    "menu_right": "Menu navigation: right / increase",
-    "volume_up":   "Music volume up (Page Up)",
-    "volume_down": "Music volume down (Page Down)",
-}
-
-def _write_controls(cfg):
-    doc = dict(cfg)
-    doc["_about"] = ("Key bindings for the To the Dragon Cave PC port. "
-                     "This file is saved next to the program. Edit the lists "
-                     "and restart the game. Combine modifiers like CTRL+SPACE.")
-    doc["_gestures"] = dict(_GESTURE_DOCS)
-    try:
-        with open(CONTROLS_FILE, "w", encoding="utf-8") as f:
-            json.dump(doc, f, indent=1, ensure_ascii=False)
-    except Exception:
-        pass
-
-def _load_controls():
-    cfg = json.loads(json.dumps(CONTROLS_DEFAULT))
-    try:
-        with open(CONTROLS_FILE, "r", encoding="utf-8") as f:
-            user = json.load(f)
-        for k, v in (user or {}).items():
-            if not k.startswith("_") and k in cfg and isinstance(v, list) and v:
-                cfg[k] = [str(x) for x in v]
-    except Exception:
-        pass
-    _write_controls(cfg)
+def _build_action_keys():
     plain, combos = {}, {}
-    for action, specs in cfg.items():
+    for action, specs in CONTROLS.items():
         pset, clist = set(), []
         for spec in specs:
             parts = [p.strip().upper() for p in str(spec).split("+")]
@@ -549,9 +521,9 @@ def _load_controls():
                     pset.add(kc)
         plain[action] = frozenset(pset)
         combos[action] = tuple(clist)
-    return cfg, plain, combos
+    return plain, combos
 
-CONTROLS, ACTION_KEYS, ACTION_COMBOS = _load_controls()
+ACTION_KEYS, ACTION_COMBOS = _build_action_keys()
 
 def is_action(action, ev):
     """True when a KEYDOWN event matches the binding of `action`."""
@@ -706,7 +678,7 @@ class AudioEngine:
         "open":   ("Popup Open",),
         "back":   ("Popup Close",),
         "error":  ("Negative",),
-        "buy":    ("ItemPurchased",),
+        "buy":    ("Item Purchased",),
     }
 
     def play_ui(self, kind, volume=0.9):
@@ -738,14 +710,6 @@ def sfx(*names):
     """Return the first audio name that exists on disk."""
     for n in names:
         if n and os.path.exists(os.path.join(AUDIO_DIR, n + ".ogg")):
-            return n
-    return None
-
-def sfx_lang(base, suffix="en"):
-    """English-only: prefer the _en voice file, then the unsuffixed one.
-    Never falls back to Czech/German/Polish voice files."""
-    for n in (base + "_en", base):
-        if os.path.exists(os.path.join(AUDIO_DIR, n + ".ogg")):
             return n
     return None
 
@@ -897,23 +861,23 @@ class Attacker:
             self.health = self.max_health
         # audio mapping per enemy type
         sounds = {
-            "Goblin":         ("Goblin_strong_attack_1", "Goblin_death_11", "Goblin_pain_10"),
-            "GoblinFast":     ("Goblin_strong_attack_13", "Goblin_death_14", "Goblin_pain_13"),
-            "Werewolf":       ("Gnoll_Monster_Attack_3_Wolf_Hyena_Dog_Creature_", "Gnoll_Monster_Death_1_Wolf_Hyena_Dog_Creature_", "Gnoll_Monster_Pain_3_Wolf_Hyena_Dog_Creature_"),
-            "Snowhund":       ("Bear Attacks _4", "Gnoll_Monster_Death_3_Wolf_Hyena_Dog_Creature_", "Gnoll_Monster_Pain_3_Wolf_Hyena_Dog_Creature_"),
-            "Griffin":        ("Bear Attacks _4", "Harpy_Monster_Death_3_Bird_Dinosaur_Witch_Creature", "Harpy_Monster_Pain_3_Bird_Dinosaur_Witch_Creature"),
-            "Harpy":          ("Harpy_Monster_Attack_1_Bird_Dinosaur_Witch_Creature", "Harpy_Monster_Death_3_Bird_Dinosaur_Witch_Creature", "Harpy_Monster_Pain_3_Bird_Dinosaur_Witch_Creature"),
-            "Spider":         ("Spider_Queen_Monster_Attack_1_Insect_Bug_Screech_Squeal_Angry_Combat", "Spider_Queen_Monster_Death_2_Insect_Bug_Screech_Squeal_Pain_Hurt_Moan_Groan", "Spider_Queen_Monster_Pain_1_Insect_Bug_Screech_Chirp_Death_Hit_Squish"),
-            "Treant":         ("Treant_Monster_Attack_1_Tree_Creature_Swing_Growl_Roar", "Treant_Monster_Death_1_Tree_Creature_Groan_Pain_Hurt_Moan_Die", "Treant_Monster_Pain_1_Tree_Creature_Croak_Groan_Moan_Squeal"),
-            "TreantStronger": ("Treant_Monster_Attack_2_Tree_Creature_Swing_Growl_Roar", "Treant_Monster_Death_3_Tree_Creature_Groan_Pain_Hurt_Moan_Die", "Treant_Monster_Pain_1_Tree_Creature_Croak_Groan_Moan_Squeal"),
-            "Kelpie":         ("Kelpie_Monster_Attack_2_Water_Spirit_Horse_Creature", "Kelpie_Monster_Death_3_Water_Spirit_Horse_Creature", "Kelpie_Monster_Pain_2_Water_Spirit_Horse_Creature"),
-            "Mammoth":        ("Mammoth_Monster_Attack_1_Elephant_Vocalization_Roar_Squeal", "Mammoth_Monster_Death_3_Elephant_Vocalization_Roar_Moan_Groan_Pain", "Mammoth_Monster_Pain_1_Elephant_Vocalization_Grunt_Breath"),
-            "Wight":          ("Wight_Monster_Attack_2_Spirit_Fairy_Ghost_Creature", "Wraith_Monster_Death_1_Spirit_Fairy_Ghost_Creature", "Wight_Monster_Pain_1_Spirit_Fairy_Ghost_Creature"),
-            "Wraith":         ("Wraith_Monster_Attack_1_Spirit_Fairy_Ghost_Creature", "Wraith_Monster_Death_1_Spirit_Fairy_Ghost_Creature", "Wraith_Monster_Pain_1_Spirit_Fairy_Ghost_Creature"),
-            "YoungDragon":    ("Ancient_Dragon_Monster_Attack_1_Dinosaur_Creature_Roar_Growl_Moan_Groan", "Ancient_Dragon_Monster_Death_4_Dinosaur_Creature_Pain_Screech_Scream_Roar_Groan", "Ancient_Dragon_Monster_Pain_1_Dinosaur_Creature_Hurt_Squeal_Vocalization"),
-            "Wizard":         ("AGGRO 1", "Alien Death_03", "Alien Hit_01"),
-            "TentacleEnemy":  ("Kraken_Monster_Attack_2_Fight_Growl_Grunt", "Kraken_Monster_Attack_2_Fight_Growl_Grunt", "Alien Hit_01"),
-            "Dragon":         ("Ancient_Dragon_Monster_Attack_2_Dinosaur_Creature_Roar_Growl_Moan_Groan", "Ancient_Dragon_Monster_Death_4_Dinosaur_Creature_Pain_Screech_Scream_Roar_Groan", "Ancient_Dragon_Monster_Pain_1_Dinosaur_Creature_Hurt_Squeal_Vocalization"),
+            "Goblin":         ("Goblin strong attack 1", "Goblin death 11", "Goblin pain 10"),
+            "GoblinFast":     ("Goblin strong attack 13", "Goblin death 14", "Goblin pain 13"),
+            "Werewolf":       ("Gnoll Monster Attack 3 Wolf Hyena Dog Creature", "Gnoll Monster Death 1 Wolf Hyena Dog Creature", "Gnoll Monster Pain 3 Wolf Hyena Dog Creature"),
+            "Snowhund":       ("Bear Attacks 4", "Gnoll Monster Death 3 Wolf Hyena Dog Creature", "Gnoll Monster Pain 3 Wolf Hyena Dog Creature"),
+            "Griffin":        ("Bear Attacks 4", "Harpy Monster Death 3 Bird Dinosaur Witch Creature", "Harpy Monster Pain 3 Bird Dinosaur Witch Creature"),
+            "Harpy":          ("Harpy Monster Attack 1 Bird Dinosaur Witch Creature", "Harpy Monster Death 3 Bird Dinosaur Witch Creature", "Harpy Monster Pain 3 Bird Dinosaur Witch Creature"),
+            "Spider":         ("Spider Queen Monster Attack 1 Insect Bug Screech Squeal Angry Combat", "Spider Queen Monster Death 2 Insect Bug Screech Squeal Pain Hurt Moan Groan", "Spider Queen Monster Pain 1 Insect Bug Screech Chirp Death Hit Squish"),
+            "Treant":         ("Treant Monster Attack 1 Tree Creature Swing Growl Roar", "Treant Monster Death 1 Tree Creature Groan Pain Hurt Moan Die", "Treant Monster Pain 1 Tree Creature Croak Groan Moan Squeal"),
+            "TreantStronger": ("Treant Monster Attack 2 Tree Creature Swing Growl Roar", "Treant Monster Death 3 Tree Creature Groan Pain Hurt Moan Die", "Treant Monster Pain 1 Tree Creature Croak Groan Moan Squeal"),
+            "Kelpie":         ("Kelpie Monster Attack 2 Water Spirit Horse Creature", "Kelpie Monster Death 3 Water Spirit Horse Creature", "Kelpie Monster Pain 2 Water Spirit Horse Creature"),
+            "Mammoth":        ("Mammoth Monster Attack 1 Elephant Vocalization Roar Squeal", "Mammoth Monster Death 3 Elephant Vocalization Roar Moan Groan Pain", "Mammoth Monster Pain 1 Elephant Vocalization Grunt Breath"),
+            "Wight":          ("Wight Monster Attack 2 Spirit Fairy Ghost Creature", "Wraith Monster Death 1 Spirit Fairy Ghost Creature", "Wight Monster Pain 1 Spirit Fairy Ghost Creature"),
+            "Wraith":         ("Wraith Monster Attack 1 Spirit Fairy Ghost Creature", "Wraith Monster Death 1 Spirit Fairy Ghost Creature", "Wraith Monster Pain 1 Spirit Fairy Ghost Creature"),
+            "YoungDragon":    ("Ancient Dragon Monster Attack 1 Dinosaur Creature Roar Growl Moan Groan", "Ancient Dragon Monster Death 4 Dinosaur Creature Pain Screech Scream Roar Groan", "Ancient Dragon Monster Pain 1 Dinosaur Creature Hurt Squeal Vocalization"),
+            "Wizard":         ("AGGRO 1", "Alien Death 03", "Alien Hit 01"),
+            "TentacleEnemy":  ("Kraken Monster Attack 2 Fight Growl Grunt", "Kraken Monster Attack 2 Fight Growl Grunt", "Alien Hit 01"),
+            "Dragon":         ("Ancient Dragon Monster Attack 2 Dinosaur Creature Roar Growl Moan Groan", "Ancient Dragon Monster Death 4 Dinosaur Creature Pain Screech Scream Roar Groan", "Ancient Dragon Monster Pain 1 Dinosaur Creature Hurt Squeal Vocalization"),
         }
         a, d, i = sounds.get(kind, (None, None, None))
         a = sfx(a); d = sfx(d); i = sfx(i)
@@ -924,16 +888,16 @@ class Attacker:
         if self._walk_channel and self._walk_channel.get_busy():
             return
         walk_names = {
-            "Goblin": "Goblin_breath_1", "GoblinFast": "Goblin_breath_2",
+            "Goblin": "Goblin breath 1", "GoblinFast": "Goblin breath 2",
             "Werewolf": "Dog Footsteps 1", "Snowhund": "Dog Footsteps 2",
-            "Griffin": "Harpy_Monster_Wings_2_Bird_Dinosaur_Witch_Creature",
-            "Harpy": "Harpy_Monster_Wings_2_Bird_Dinosaur_Witch_Creature",
-            "Spider": "BABY FOOTSTEPS 1", "Treant": "Treant_Monster_Attack_4_Stomp_Tree_Creature_Impact_Hit",
-            "TreantStronger": "Treant_Monster_Attack_4_Stomp_Tree_Creature_Impact_Hit",
+            "Griffin": "Harpy Monster Wings 2 Bird Dinosaur Witch Creature",
+            "Harpy": "Harpy Monster Wings 2 Bird Dinosaur Witch Creature",
+            "Spider": "BABY FOOTSTEPS 1", "Treant": "Treant Monster Attack 4 Stomp Tree Creature Impact Hit",
+            "TreantStronger": "Treant Monster Attack 4 Stomp Tree Creature Impact Hit",
             "Kelpie": "Ambience_Swamp_01", "Mammoth": "BABY FOOTSTEPS 2",
             "Wight": "Ambient 14", "Wraith": "Ambient 14",
-            "YoungDragon": "BABY FOOTSTEPS 3", "Dragon": "Ancient_Dragon_Monster_Snore_Dinosaur_Creature_Inhale_Exhale_Breath_Airy",
-            "Wizard": "72621__j1987__light-chimes", "TentacleEnemy": "Ambience_Waves_Ocean_Loop",
+            "YoungDragon": "BABY FOOTSTEPS 3", "Dragon": "Ancient Dragon Monster Snore Dinosaur Creature Inhale Exhale Breath Airy",
+            "Wizard": "light chimes", "TentacleEnemy": "Ambience Waves Ocean Loop",
         }
         n = walk_names.get(self.kind)
         n = sfx(n) if n else None
@@ -1145,7 +1109,7 @@ class Game:
         self.credits_pages = 5
 
     # ------------------------------------------------------------------ flow
-    THEME_SONG = "Kikiriki Dragons Cave 1C - English Vocals "   # trailing space is part of the filename
+    THEME_SONG = "Kikiriki Dragons Cave 1C English Vocals"   # theme song with English vocals
 
     def music_vol(self, base=0.8):
         return base * SESSION.soundtrack_volume / 100.0
@@ -1295,9 +1259,9 @@ class Game:
         LevelStats.levelTime = int(w.time)
         LevelStats.levelFinished = True
         if win:
-            AUDIO.play(sfx("554312__opticaillusions__sparkly", "329795__unaxete__mystery-chime") or "", 1.0)
+            AUDIO.play(sfx("sparkly", "mystery chime") or "", 1.0)
         else:
-            AUDIO.play(sfx("223318__diboz__subsonicatmosone", "Ambient 32") or "", 1.0)
+            AUDIO.play(sfx("subsonicatmosone", "Ambient 32") or "", 1.0)
         AUDIO.stop_all_sfx()
         for e in w.enemies:
             e.stop_walk_sound()
@@ -1352,7 +1316,7 @@ class Game:
         else:
             SESSION.save()
             self.set_state("Loose")
-            AUDIO.play_music(sfx("277297__heirloomsound__fantasy-ambience", "Ambient 14") or "", 0.4 * SESSION.soundtrack_volume / 100.0)
+            AUDIO.play_music(sfx("fantasy ambience", "Ambient 14") or "", 0.4 * SESSION.soundtrack_volume / 100.0)
             SPEECH.say("You died. Press enter to return to the menu.")
 
     def _goto_next_scene(self):
@@ -1360,13 +1324,13 @@ class Game:
             # Outro (4 endings) then credits - English bank: no language suffix
             self.set_state("Outro")
             if SESSION.frogKilled and SESSION.princeSaved:
-                name = "Outro_FrogKilledPrinceSaved"
+                name = "Outro Frog Killed Prince Saved"
             elif SESSION.frogKilled:
-                name = "Outro_FrogKilledPrinceKilled"
+                name = "Outro Frog Killed Prince Killed"
             elif SESSION.princeSaved:
-                name = "Outro_FrogSavedPrinceSaved"
+                name = "Outro Frog Saved Prince Saved"
             else:
-                name = "Outro_FrogSavedPrinceKilled"
+                name = "Outro Frog Saved Prince Killed"
             if AUDIO.load(name) is None:
                 name = "Outro"
             AUDIO.play_story(name, self._goto_credits)
@@ -1376,7 +1340,7 @@ class Game:
     def _goto_credits(self):
         self.set_state("Credits")
         self.credits_page = 0
-        AUDIO.play_music("Final-song", self.music_vol(0.6), loop=True)
+        AUDIO.play_music("Final song", self.music_vol(0.6), loop=True)
         SPEECH.say("Congratulations! You finished the game. Credits. Left and right to browse, escape for menu.")
 
     def quit(self):
@@ -1395,7 +1359,7 @@ class Game:
         if w.active_weapon == "Sword":
             w.attack_ready = now + SWORD_ATTACK_SPEED
             w.sword_swing_t = 0.35    # swingSpeed 400 deg/s swing window
-            AUDIO.play(sfx("Sword Swing 1_1") or "", 0.9)
+            AUDIO.play(sfx("Sword Swing 1 1") or "", 0.9)
             self._sword_hit()
         else:  # Crossbow
             if w.arrows <= 0:
@@ -1405,8 +1369,8 @@ class Game:
             w.attack_ready = now + CROSSBOW_ATTACK_SPEED
             w.arrows -= 1
             LevelStats.crossbowArrowsFired += 1
-            AUDIO.play(sfx("CrossbowDraw_1") or "", 0.9)
-            AUDIO.play(sfx("Arrow Fly 2_3") or "", 0.8)
+            AUDIO.play(sfx("Crossbow Draw 1") or "", 0.9)
+            AUDIO.play(sfx("Arrow Fly 2 3") or "", 0.8)
             self._arrow_fire()
 
     def _nearest_in_front(self, max_deg=6.0, require_alive=True):
@@ -1462,7 +1426,7 @@ class Game:
             if w.dragon_heads_left > 0:
                 SPEECH.say("The dragon lost a head! %d to go" % w.dragon_heads_left)
             else:
-                AUDIO.play(sfx("Ancient_Dragon_Monster_Attack_3_Dinosaur_Creature_Roar_Growl_Moan_Groan") or "", 1.0)
+                AUDIO.play(sfx("Ancient Dragon Monster Attack 3 Dinosaur Creature Roar Growl Moan Groan") or "", 1.0)
         if w.boss_type == "kraken":
             pass
         # remove shortly (death sound plays out)
@@ -1478,7 +1442,7 @@ class Game:
             return
         w.is_crouching = True
         w.crouch_left = w.crouch_time
-        AUDIO.play("Duck Flapping Wings _4", 0.7)
+        AUDIO.play("Duck Flapping Wings 4", 0.7)
 
     def do_potion(self):
         w = self.world
@@ -1491,8 +1455,7 @@ class Game:
             return
         w.heal_potions -= 1
         w.player_health = w.player_max_health
-        suffix = LANG_SUFFIX.get(SESSION.language, "en")
-        AUDIO.play(sfx("HealPotion", "HealWounds") or "", 1.0)
+        AUDIO.play(sfx("Heal Potion", "Heal Wounds") or "", 1.0)
         SPEECH.say("Healing potion used")
 
     def do_fireball(self):
@@ -1503,8 +1466,7 @@ class Game:
             SPEECH.say("Fireballs are not available yet")
             return
         if w.fireballs <= 0:
-            suffix = LANG_SUFFIX.get(SESSION.language, "en")
-            AUDIO.play(sfx("no_weapon_tap_en", "no_weapon_tap") or "", 1.0)
+            AUDIO.play(sfx("no weapon tap") or "", 1.0)
             SPEECH.say("No fireballs")
             return
         w.is_throwing_fireball = True
@@ -1519,10 +1481,10 @@ class Game:
             return
         w.active_weapon = weapon
         if weapon == "Crossbow":
-            AUDIO.play(sfx("CrossbowDraw_1") or "", 0.8)
+            AUDIO.play(sfx("Crossbow Draw 1") or "", 0.8)
             SPEECH.say("Crossbow")
         else:
-            AUDIO.play(sfx("diamond_sword_draw") if w.sword_upgraded else sfx("Sword Swing 1_1") or "", 0.9)
+            AUDIO.play(sfx("diamond sword draw") if w.sword_upgraded else sfx("Sword Swing 1 1") or "", 0.9)
             SPEECH.say("Diamond sword" if w.sword_upgraded else "Sword")
 
     def read_status(self):
@@ -1647,7 +1609,7 @@ class Game:
                     killed = self._hit_enemy(tgt, p.damage, by="fireball")
                     if killed:
                         LevelStats.enemiesKilledByFireball += 1
-                    AUDIO.play(sfx("BREATHE2", "Fire Punch 1") or "", 0.9)
+                    AUDIO.play(sfx("BREATHE 2", "Fire Punch 1") or "", 0.9)
                     p.dead = True
                 elif p.distance > ATTACKER_DISTANCE + 10:
                     LevelStats.fireballMiss += 1
@@ -1658,7 +1620,7 @@ class Game:
                     if not w.is_crouching:
                         self.player_hit(p.damage)
                     else:
-                        AUDIO.play("Introduction_Crouch_Success_en", 0.8)
+                        AUDIO.play("Introduction Crouch Success", 0.8)
                         SPEECH.say("Dodged!")
             if p.dead:
                 w.projectiles.remove(p)
@@ -1683,7 +1645,7 @@ class Game:
         # ---- win / loose
         if w.player_health <= 0 and not w.dead:
             w.dead = True
-            AUDIO.play(sfx("Alien Death_03") or "", 1.0)
+            AUDIO.play(sfx("Alien Death 03") or "", 1.0)
             AUDIO.play_heartbeat(0)
             self.finish_level(win=False)
             return
@@ -1704,7 +1666,7 @@ class Game:
         w = self.world
         dmg = w.player_hit_damage(dmg)
         w.player_health -= dmg
-        AUDIO.play(sfx("Alien Hit_01", "AGGRO 2") or "", 0.9)
+        AUDIO.play(sfx("Alien Hit 01", "AGGRO 2") or "", 0.9)
         SPEECH.say("Ouch")
         if w.player_health <= 0:
             w.player_health = 0
@@ -1736,7 +1698,7 @@ class Game:
             w.boss_state = "walking"
             w.boss_dir = 1.0
             w.boss_pos = -40.0
-            AUDIO.play(sfx("Ancient_Dragon_Monster_Idle_Chatter_Dinosaur_Creature_Select_Unit_Bear_Growl", "Bear Attacks _4") or "", 0.6, loop=True)
+            AUDIO.play(sfx("Ancient Dragon Monster Idle Chatter Dinosaur Creature Select Unit Bear Growl", "Bear Attacks 4") or "", 0.6, loop=True)
         if w.boss_state == "walking":
             w.boss_pos += w.boss_dir * t["move_speed"] * 10 * dt
             if w.boss_pos > 40: w.boss_pos, w.boss_dir = 40, -1.0
@@ -1746,7 +1708,7 @@ class Game:
                 w.boss_state = "attacking"
                 w.boss_timer = t["attack_duration"]
                 w.boss_dodged = False
-                AUDIO.play(sfx("Treant_Monster_Attack_4_Stomp_Tree_Creature_Impact_Hit", "Bear Attacks _4") or "", 1.0)
+                AUDIO.play(sfx("Treant Monster Attack 4 Stomp Tree Creature Impact Hit", "Bear Attacks 4") or "", 1.0)
                 SPEECH.say("The troll attacks! Swipe left or right!")
         elif w.boss_state == "attacking":
             if w.boss_timer <= 0:
@@ -1761,7 +1723,7 @@ class Game:
             return
         if abs(w.boss_pos - direction * 25) < 30:
             w.boss_dodged = True
-            AUDIO.play(sfx("Duck Flapping Wings _4") or "", 0.9)
+            AUDIO.play(sfx("Duck Flapping Wings 4") or "", 0.9)
 
     # Snakes (Level 8): snakes strike from sides; dodge left/right within 2s
     def update_snakes(self, dt):
@@ -1770,13 +1732,13 @@ class Game:
         if w.boss_state is None:
             w.boss_state = "idle"
             w.boss_timer = 2.0
-            AUDIO.play(sfx("Ambience_Place_Cave_Dark_Loop") or "", 0.5, loop=True)
+            AUDIO.play(sfx("Ambience Place Cave Dark Loop") or "", 0.5, loop=True)
         if w.boss_state == "idle" and w.boss_timer <= 0:
             w.boss_state = "attacking"
             w.boss_dir = random.choice([-1.0, 1.0])
             w.boss_timer = t["attack_duration"]
             w.boss_dodged = False
-            AUDIO.play_at(sfx("Snake_02_wav", "Spider_Queen_Monster_Attack_1_Insect_Bug_Screech_Squeal_Angry_Combat") or "", w.boss_dir * 30, 20, 1.0)
+            AUDIO.play_at(sfx("Snake 02", "Spider Queen Monster Attack 1 Insect Bug Screech Squeal Angry Combat") or "", w.boss_dir * 30, 20, 1.0)
             SPEECH.say("Snake!")
         elif w.boss_state == "attacking" and w.boss_timer <= 0:
             if not w.boss_dodged:
@@ -1791,13 +1753,13 @@ class Game:
         if w.boss_state is None:
             w.boss_state = "idle"
             w.boss_timer = 3.0
-            AUDIO.play(sfx("Ambience_Waves_Ocean_Loop") or "", 0.6, loop=True)
+            AUDIO.play(sfx("Ambience Waves Ocean Loop") or "", 0.6, loop=True)
         if w.boss_state == "idle" and w.boss_timer <= 0:
             w.boss_state = "attacking"
             w.boss_dir = random.choice([-1.0, 1.0])
             w.boss_timer = t["attack_duration"]
             w.boss_dodged = False
-            AUDIO.play_at(sfx("AGGRO 3", "Ambience_Waves_Ocean_Loop") or "", w.boss_dir * 60, 10, 1.0)
+            AUDIO.play_at(sfx("AGGRO 3", "Ambience Waves Ocean Loop") or "", w.boss_dir * 60, 10, 1.0)
             SPEECH.say("Wave from the " + ("left" if w.boss_dir < 0 else "right") + "!")
         elif w.boss_state == "attacking" and w.boss_timer <= 0:
             if not w.boss_dodged:
@@ -1812,7 +1774,7 @@ class Game:
         if w.boss_state is None:
             w.boss_state = "wait"
             w.boss_timer = 3.0
-            AUDIO.play(sfx("Ambience_Waves_Ocean_Loop") or "", 0.6, loop=True)
+            AUDIO.play(sfx("Ambience Waves Ocean Loop") or "", 0.6, loop=True)
             SPEECH.say("The kraken wakes!")
         if w.boss_state == "wait" and w.boss_timer <= 0:
             if w.tentacles_left() < k["tentacles"] and w.attacker_count() < 2:
@@ -1837,7 +1799,7 @@ class Game:
                 w.boss_state = "frog"
                 w.boss_timer = 0.5
                 SPEECH.say("The wizard turned into a frog! What will you do?")
-                AUDIO.play(sfx("Frog Ribbits", "Frog Ribbits _1") or "", 0.9)
+                AUDIO.play(sfx("Frog Ribbits", "Frog Ribbits 1") or "", 0.9)
             else:
                 wiz.bearing = math.sin(w.time * 0.7) * 40
                 if random.random() < (0.70 * dt / 3.0):
@@ -1850,7 +1812,7 @@ class Game:
             w.boss_timer -= dt
             if w.boss_timer <= 0:
                 w.boss_timer = 8.0
-                AUDIO.play(sfx("Frog Ribbits", "Frog Ribbits _1") or "", 0.9)
+                AUDIO.play(sfx("Frog Ribbits", "Frog Ribbits 1") or "", 0.9)
                 SPEECH.say("The frog is in front of you. Attack to kill it, or wait to save it.")
             if w.boss_timer <= -12.0:
                 w.boss_state = "frog_saved"
@@ -1861,7 +1823,7 @@ class Game:
             return
         if attacked:
             w.boss_state = "frog_killed"
-            AUDIO.play(sfx("Frog Ribbits _3", "Frog Ribbits _4") or "", 1.0)
+            AUDIO.play(sfx("Frog Ribbits 3", "Frog Ribbits 4") or "", 1.0)
             SPEECH.say("You killed the frog!")
         else:
             w.boss_state = "frog_saved"
@@ -1874,7 +1836,7 @@ class Game:
         d = w.cfg["dragon"]
         if w.boss_state is None:
             w.boss_state = "fight"
-            AUDIO.play(sfx("Ancient_Dragon_Monster_Growl_Dinosaur_Creature_Gurgle_Deep_Crispy") or "", 1.0)
+            AUDIO.play(sfx("Ancient Dragon Monster Growl Dinosaur Creature Gurgle Deep Crispy") or "", 1.0)
             SPEECH.say("The dragon has three heads! Duck under its fireballs!")
         if w.boss_state == "fight":
             if w.boss_timer <= 0:
@@ -2267,11 +2229,11 @@ class Game:
                 pass  # wrong way is fine too - snakes dodge = any quick swipe? original: direction check
             if w.boss_state == "attacking":
                 w.boss_dodged = True
-                AUDIO.play(sfx("Duck Flapping Wings _5") or "", 0.9)
+                AUDIO.play(sfx("Duck Flapping Wings 5") or "", 0.9)
         elif w.boss_type == "waves":
             if w.boss_state == "attacking":
                 w.boss_dodged = True
-                AUDIO.play(sfx("Ambience_Waves_Ocean_Loop") or "", 0.7)
+                AUDIO.play(sfx("Ambience Waves Ocean Loop") or "", 0.7)
                 SPEECH.say("Dodged!")
 
 # ----------------------------------------------------------------------------
