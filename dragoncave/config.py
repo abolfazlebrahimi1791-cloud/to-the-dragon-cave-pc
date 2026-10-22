@@ -55,6 +55,15 @@ MAX_ANGLE = 60.0
 SWIPE_ANGLE_THRESHOLD = 35.0     # degrees
 RAD2DEG = 57.295780181884766
 
+# Projectile hit envelope (Projectile.OnTriggerEnter is Unity physics: the
+# enemy collider has a real width, so its angular size = atan2(radius, dist).
+# Enemies spawn at 50 units (AttackerSpawner constant) and walk in; the floor
+# keeps distant shots hittable with keyboard turning.
+ARROW_HIT_RADIUS = 3.0           # enemy body + player-contact trigger width
+ARROW_HIT_FLOOR = 8.0            # degrees - centered-sound tolerance
+FIREBALL_HIT_RADIUS = 4.0        # fireballs are wider
+FIREBALL_HIT_FLOOR = 12.0        # degrees
+
 NUMBER_OF_LEVELS = 24
 FIREBALL_AVAILABLE_FROM_LEVEL = 13
 

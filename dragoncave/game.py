@@ -19,6 +19,8 @@ from .config import (LEVELS, ENDLESS, PROJECTILE, MARKET_PRICES,
                      NUMBER_OF_LEVELS, FIREBALL_AVAILABLE_FROM_LEVEL,
                      SWORD_DAMAGE, SWORD_ATTACK_SPEED, CROSSBOW_ATTACK_SPEED,
                      DISTANCE_BONUS, ATTACKER_DISTANCE,
+                     ARROW_HIT_RADIUS, ARROW_HIT_FLOOR,
+                     FIREBALL_HIT_RADIUS, FIREBALL_HIT_FLOOR,
                      unity_random_range_int, unity_random_range_float)
 from .speech import SPEECH
 from .audio import AUDIO, sfx
@@ -121,7 +123,15 @@ class Game:
 
     def speak_level_select(self):
         n = self.play_level_index + 1
-        SPEECH.say("Level %d. Left and right arrow to choose, enter to play, escape to go back." % n)
+        if n > SESSION.level:
+            # locked: the original map only lets you play levels you have
+            # reached (GameSession.level is the progress frontier)
+            SPEECH.say("Level %d. Locked. You have unlocked levels 1 to %d. "
+                       "Left and right arrow to choose, escape to go back."
+                       % (n, SESSION.level))
+        else:
+            SPEECH.say("Level %d. Left and right arrow to choose, enter to "
+                       "play, escape to go back." % n)
 
     def speak_settings(self):
         items = self.SETTINGS_ITEMS
@@ -149,11 +159,12 @@ class Game:
         SESSION.save()
 
     # ------------------------------------------------------------- level flow
-    def launch_level(self, n, endless=False):
+    def launch_level(self, n, endless=False, single=False):
         LevelStats.reset()
         AUDIO.stop_music()
         AUDIO.stop_all_sfx()
         self.world = GameWorld(n, endless=endless)
+        self.world.single_level = single   # launched from the level select
         intro = self.world.cfg.get("intro", "Silence")
         self.set_state("LevelIntro")
         if intro and intro != "Silence":
@@ -234,13 +245,23 @@ class Game:
                           self.endless_stats["acc"]))
             return
         if win:
+            # replaying an old level from the level select: no progression,
+            # back to the level select (the original returns to the map)
+            if getattr(w, "single_level", False) and w.level_number \
+                    and w.level_number < SESSION.level:
+                SESSION.save()
+                SPEECH.say("Level %d finished." % w.level_number)
+                self.set_state("PlayLevel")
+                self.play_level_index = w.level_number - 1
+                self.speak_level_select()
+                return
             if w.cfg.get("market"):
                 self.set_state("Market")
                 self.market_index = 0
                 AUDIO.play_music("Marketplace", self.music_vol(0.6))
                 self.speak_market()
                 return
-            # ProgressToNextLevel
+            # ProgressToNextLevel (only the story frontier advances)
             if SESSION.level < NUMBER_OF_LEVELS:
                 SESSION.level += 1
             else:
@@ -375,19 +396,26 @@ class Game:
                        PROJECTILE["arrow"]["damage"], w.player_bearing)
         w.projectiles.append(p)
 
-    def _projectile_target(self, p, window_deg, prev_dist):
+    def _projectile_target(self, p, radius, floor_deg, prev_dist):
         """Port of Projectile.OnTriggerEnter (RVA 0xE4A1C0): the projectile is
         a physical object flying STRAIGHT in the bearing it was fired at - it
         does NOT follow the player's facing. It damages the FIRST (closest)
-        living enemy it reaches inside its narrow angular window, then is
-        destroyed - one hit per projectile."""
+        living enemy whose collider it reaches, then is destroyed - one hit
+        per projectile.
+
+        The original hit test is Unity physics: the enemy has a real collider
+        (capsule r=0.5 body + the wide player-contact trigger), so its angular
+        size GROWS as it approaches: atan2(radius, distance). The floor keeps
+        long shots hittable with keyboard turning (the original aimed with an
+        analog drag; arrow taps/holds cannot centre quite as exactly)."""
         best = None
         for e in self.world.enemies:
             if e.is_dying:
                 continue
             ang = abs(e.bearing - p.bearing)
             ang = min(ang, 360.0 - ang)
-            if ang > window_deg:
+            win = max(floor_deg, math.degrees(math.atan2(radius, max(e.distance, 0.5))))
+            if ang > win:
                 continue
             if prev_dist - 1.0 <= e.distance <= p.distance + 1.0:
                 if best is None or e.distance < best.distance:
@@ -589,7 +617,8 @@ class Game:
             prev = p.distance
             p.distance += p.speed * dt
             if p.kind == "arrow":
-                tgt = self._projectile_target(p, 6.0, prev)
+                # collider-sized window (grows as the enemy approaches)
+                tgt = self._projectile_target(p, ARROW_HIT_RADIUS, ARROW_HIT_FLOOR, prev)
                 if tgt is not None:
                     LevelStats.crossbowHit += 1
                     # difficulty adjustment happens exactly ONCE, inside
@@ -610,7 +639,7 @@ class Game:
                         AUDIO.play(sfx("Introduction Attack Miss") or "", 1.0)
                     p.dead = True
             elif p.kind == "fireball":
-                tgt = self._projectile_target(p, 10.0, prev)
+                tgt = self._projectile_target(p, FIREBALL_HIT_RADIUS, FIREBALL_HIT_FLOOR, prev)
                 if tgt is not None:
                     LevelStats.fireballHit += 1
                     killed = self._hit_enemy(tgt, p.damage, by="fireball")
@@ -959,8 +988,15 @@ class Game:
                 self.play_level_index = (self.play_level_index + 1) % NUMBER_OF_LEVELS
                 self.speak_level_select()
             elif is_action("confirm", ev):
-                AUDIO.play_ui("select")
-                self.launch_level(self.play_level_index + 1)
+                n = self.play_level_index + 1
+                if n > SESSION.level:
+                    # locked (GameSession.level is the unlock frontier)
+                    AUDIO.play_ui("error")
+                    SPEECH.say("Level %d is locked. Finish level %d first."
+                               % (n, SESSION.level))
+                else:
+                    AUDIO.play_ui("select")
+                    self.launch_level(n, single=True)
             elif is_action("back", ev) or is_action("pause", ev):
                 AUDIO.play_ui("back")
                 self.back_to_menu()
@@ -1093,9 +1129,9 @@ class Game:
             elif is_action("fireball", ev):
                 self.do_fireball()
             elif is_action("turn_left", ev):
-                self.turn(-1, 10.0)
+                self.turn(-1, 5.0)    # fine steps: 5 deg per tap for precise aiming
             elif is_action("turn_right", ev):
-                self.turn(1, 10.0)
+                self.turn(1, 5.0)
             return
 
         if st == "Outro":
@@ -1180,7 +1216,12 @@ class Game:
                 y += 42
         elif self.state == "PlayLevel":
             center("Choose a level", 80, big)
-            center("Level %d" % (self.play_level_index + 1), 220, big, (255, 215, 100))
+            n = self.play_level_index + 1
+            if n > SESSION.level:
+                center("Level %d (locked)" % n, 220, big, (170, 90, 80))
+                center("Unlocked: levels 1 to %d" % SESSION.level, 260, col=(150, 140, 120))
+            else:
+                center("Level %d" % n, 220, big, (255, 215, 100))
             center("Left/Right to choose, Enter to play, Escape for menu", 300, col=(150, 140, 120))
         elif self.state == "Settings":
             center("Settings", 60, big)

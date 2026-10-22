@@ -197,6 +197,7 @@ class GameWorld:
         self.intro_done = False
         self.heartbeat_t = 0.0
         self.status_readout_t = 0.0
+        self.single_level = False       # launched from the level select (replay)
 
     # ---- difficulty damage adjustment for player hits (original quirk:
     # enemies (not tagged Player) always run AdjustDamage, player raw on NORMAL)

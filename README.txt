@@ -73,6 +73,12 @@ playing when you return from a submenu. The Credits screen reads its
 full content aloud on every page (left/right or up/down to browse,
 Escape or Enter for the menu) and plays the original final song.
 
+Levels unlock like the original game: "Play a level" only starts
+levels you have reached (levels above your progress are announced as
+locked). Winning the current level in the story unlocks the next one;
+finishing level 24 unlocks the Endless battle. Replaying an older
+level never skips your progress - you return to the level select.
+
 The pause menu offers Resume, Restart level and Main menu
 (up/down arrows to choose, Enter to activate, Escape to resume).
 
@@ -111,12 +117,15 @@ follows your facing in real time - turn toward a sound and it slides
 to the center of your head, exactly like the original FMOD audio.
 Arrows and fireballs fly straight in the direction you faced when you
 fired (just like the original), so aim by turning first, then shoot;
-the shot hits the first enemy it reaches. On the tutorial level the
-game speaks up after you miss two shots. All menus, intro/outro
-dialogues and status information are spoken in English. The theme
-song plays in the main menu and the final song in the credits; adjust
-the music volume any time with Page Up / Page Down (announced aloud,
-saved in save.json).
+the shot hits the first enemy it reaches. The hit window follows the
+original collider physics (enemies are easier to hit as they get
+closer) and each tap of the arrow keys turns 5 degrees for precise
+aiming (hold the key to turn smoothly). If an enemy sounds centered,
+your shot reaches it. On the tutorial level the game speaks up after
+you miss two shots. All menus, intro/outro dialogues and status
+information are spoken in English. The theme song plays in the main
+menu and the final song in the credits; adjust the music volume any
+time with Page Up / Page Down (announced aloud, saved in save.json).
 
 Credits
 -------
